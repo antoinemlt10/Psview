@@ -12,11 +12,12 @@ export const MODELS = {
 } as const;
 
 // Timeouts par appel LLM (ms). Au-delà → fallback déterministe.
+// Right-sized : un appel Sonnet lent (mais correct) ne doit PAS tripper le fallback.
 export const TIMEOUTS = {
-  reason: 30_000,
-  write: 30_000,
-  persona: 30_000,
-  verify: 15_000,
+  reason: 45_000,
+  write: 45_000,
+  persona: 45_000,
+  verify: 20_000,
 } as const;
 
 // Plafonds de tokens de sortie (non-streaming, < 16k → pas de timeout SDK).

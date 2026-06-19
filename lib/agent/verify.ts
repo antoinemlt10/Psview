@@ -36,6 +36,25 @@ export interface DeterministicCtx {
   channelHint: ChannelHint;
 }
 
+// VERIFY est déterministe par DÉFAUT. On ne paie l'appel LLM que si c'est AMBIGU :
+// le message partage un mot significatif avec un sujet banni / une info connue
+// sans avoir été attrapé par le check littéral → reproposition/re-demande possible.
+// Sinon (cas courant) : pas de 3e appel → meta.llmCallsFired = 2 sur un tour de réaction.
+function sigTokens(s: string): Set<string> {
+  return new Set((s.toLowerCase().match(/\p{L}{4,}/gu) ?? []));
+}
+export function needsLlmVerify(msg: NextMessage, forbidden: ForbiddenList): boolean {
+  const body = sigTokens(`${msg.subject ?? ""} ${msg.body}`);
+  if (body.size === 0) return false;
+  const risky = [...forbidden.bannedTopics, ...forbidden.knownFacts];
+  for (const item of risky) {
+    for (const tok of sigTokens(item)) {
+      if (body.has(tok)) return true;
+    }
+  }
+  return false;
+}
+
 // CHECKS DURS EN CODE — rapides, sans LLM. Renvoie la liste des violations.
 export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): string[] {
   const violations: string[] = [];

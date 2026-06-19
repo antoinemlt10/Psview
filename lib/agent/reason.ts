@@ -32,6 +32,9 @@ export const ReasonOutputSchema = z.object({
   constraintsRespected: z.array(z.string()),
   avoidedRepetition: z.array(z.string()),
   channelHint: z.enum(CHANNELS),
+  // Langue de la CONVERSATION (dernier message candidat, sinon historique).
+  // Code court : "fr", "en", "es"… "" si aucun message candidat.
+  detectedLanguage: z.string(),
 });
 export type ReasonOutput = z.infer<typeof ReasonOutputSchema>;
 
@@ -112,6 +115,8 @@ function buildUser(input: AgentInput, mem: CandidateMemory, agentMem: AgentMemor
     "Produis l'objet de raisonnement. groundingFields = chemins de champs du contexte",
     'à citer (ex: "identity.name", "hiring.roles[0].title", "culture.values").',
     "constraintsRespected / avoidedRepetition = preuves lisibles de la boucle de feedback.",
+    "detectedLanguage = code court (fr/en/es/…) de la langue du DERNIER message candidat,",
+    "sinon de l'historique ; \"\" si aucun message candidat. L'agent DOIT répondre dans cette langue.",
   ].join("\n");
 }
 
@@ -141,6 +146,20 @@ export async function runReason(
 
   if (res.ok) return { reason: res.value, ok: true, calls: res.calls };
   return { reason: fallbackReason(input, mem), ok: false, error: res.error, calls: res.calls };
+}
+
+// Détection de langue déterministe (backstop quand REASON est indisponible).
+// Renvoie "fr" / "en" / "" — suffisant pour choisir un fallback dans la bonne langue.
+export function cheapDetectLang(text: string): string {
+  const t = ` ${text.toLowerCase()} `;
+  if (!t.trim()) return "";
+  const fr = /[éèêàùçœ]| je | tu | vous | nous | bonjour | merci | pas | suis | très | bien | le | la | les | un | une | est | avec | pour /;
+  const en = / the | you | your | i'm | i am | not | very | with | for | thanks | hello | hi | looking | role /;
+  const frHits = (t.match(fr) ? 1 : 0) + (/[éèêàùçœ]/.test(t) ? 1 : 0);
+  const enHits = t.match(en) ? 1 : 0;
+  if (frHits > enHits) return "fr";
+  if (enHits > 0) return "en";
+  return "";
 }
 
 // Fallback déterministe : un raisonnement sûr ancré sur le contexte, 0 LLM.
@@ -182,5 +201,10 @@ export function fallbackReason(input: AgentInput, mem: CandidateMemory): ReasonO
     constraintsRespected,
     avoidedRepetition: [],
     channelHint: "email",
+    detectedLanguage: cheapDetectLang(
+      input.incomingCandidateReply ??
+        [...input.conversation].reverse().find((m) => m.role === "candidate")?.content ??
+        "",
+    ),
   };
 }

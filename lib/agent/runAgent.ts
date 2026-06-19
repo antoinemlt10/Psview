@@ -18,11 +18,11 @@ import {
   updateTemperature,
   deriveStyleAdjustments,
 } from "./memory";
-import { runReason } from "./reason";
+import { runReason, cheapDetectLang } from "./reason";
 import { applyInvariants } from "./invariants";
 import { buildGroundingPack, buildForbiddenList } from "./grounding";
-import { runWrite, fallbackMessage, type WriteArgs } from "./write";
-import { deterministicChecks, llmVerify, type DeterministicCtx } from "./verify";
+import { runWrite, fallbackMessage, fallbackLang, type WriteArgs } from "./write";
+import { deterministicChecks, llmVerify, needsLlmVerify, type DeterministicCtx } from "./verify";
 import { defaultPlan } from "./state";
 
 function pushUnique(arr: string[], items: string[], cap = 40): string[] {
@@ -62,11 +62,17 @@ function safeFallback(args: WriteArgs, vctx: DeterministicCtx): NextMessage {
   msg = { ...msg, body: strip(msg.body), subject: msg.subject ? strip(msg.subject) : msg.subject };
   if (deterministicChecks(msg, vctx).length === 0) return msg;
 
-  const name = args.pack.fields.find((f) => f.path === "identity.name")?.value ?? "notre équipe";
+  const fr = fallbackLang(args.voiceProfile.language) === "fr";
+  const name =
+    args.pack.fields.find((f) => f.path === "identity.name")?.value ?? (fr ? "notre équipe" : "our team");
   return {
     channelHint: vctx.channelHint,
-    ...(vctx.channelHint === "email" ? { subject: "Prise de contact" } : {}),
-    body: `Bonjour, un mot rapide de la part de ${name}. Pouvons-nous en échanger ?`,
+    ...(vctx.channelHint === "email"
+      ? { subject: fr ? "Prise de contact" : "Quick note" }
+      : {}),
+    body: fr
+      ? `Un mot rapide de la part de ${name}. Pouvons-nous en échanger ?`
+      : `A quick note from ${name}. Could we connect about it?`,
   };
 }
 
@@ -117,10 +123,23 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 
     const turn = counters.messagesSent + 1;
 
+    // Historique présent ? (≥1 message agent déjà envoyé : conversation ou priorState)
+    const hasHistory =
+      counters.messagesSent >= 1 || input.conversation.some((m) => m.role === "agent");
+
     // ── 1) REASON (1 appel LLM, modèle fort) ──
     const reasonRes = await runReason(input, candidateMemory, agentMemory);
     calls += reasonRes.calls;
     if (!reasonRes.ok) errors.push(`reason: ${reasonRes.error ?? "échec"} (fallback déterministe)`);
+
+    // ── LANGUE ACTIVE : suit la conversation, pas voice.language. ──
+    // S'il y a un message candidat → langue détectée par REASON ; sinon (1er message
+    // sortant) → langue de la voix configurée.
+    const hasCandidateMsg =
+      !!input.incomingCandidateReply?.trim() ||
+      input.conversation.some((m) => m.role === "candidate");
+    const detected = reasonRes.reason.detectedLanguage?.trim();
+    const activeLanguage = hasCandidateMsg && detected ? detected : ctx.voice.language;
 
     // ── Application des MemoryOps (state) — AVANT les invariants, pour que ceux-ci
     // voient la mémoire FRAÎCHE (incl. une objection levée à ce tour). ──
@@ -134,12 +153,14 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       incomingReply: input.incomingCandidateReply,
       mem: candidateMemory,
       agentMem: agentMemory,
+      hasHistory,
+      priorStage: prior?.plan.currentStage,
     });
     const reason = inv.reason;
 
-    // ── voiceProfile + ancrage + liste d'interdits ──
+    // ── voiceProfile (langue = ACTIVE LANGUAGE) + ancrage + liste d'interdits ──
     const styleAdjustments = deriveStyleAdjustments(candidateMemory);
-    const voiceProfile = deriveVoiceProfile(ctx, styleAdjustments);
+    const voiceProfile = { ...deriveVoiceProfile(ctx, styleAdjustments), language: activeLanguage };
     const pack = buildGroundingPack(ctx, reason.groundingFields);
     const forbidden = buildForbiddenList(ctx, candidateMemory, agentMemory);
 
@@ -168,10 +189,12 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       message = safeFallback(writeArgs, vctx);
     } else {
       message = writeRes.message;
-      // ── 4) VERIFY (déterministe d'abord, LLM si ambigu) + révision bornée ──
+      // ── 4) VERIFY — DÉTERMINISTE par défaut. L'appel LLM (3e appel) n'est payé
+      //    QUE si c'est ambigu (recoupement lexical avec un sujet banni / une info
+      //    connue). Tour de réaction normal → 2 appels (reason + write). ──
       while (true) {
         let violations = deterministicChecks(message, vctx);
-        if (violations.length === 0) {
+        if (violations.length === 0 && needsLlmVerify(message, forbidden)) {
           const lv = await llmVerify(message, forbidden);
           calls += lv.calls;
           if (!lv.ok) errors.push("verify(llm): indisponible (laissé passer)");
@@ -270,11 +293,18 @@ function catastrophicFallback(input: AgentInput, errors: string[], calls: number
   const voiceProfile = deriveVoiceProfile(ctx);
   const personality = fallbackPersonality(ctx, voiceProfile);
   const plan = input.priorState?.plan ?? defaultPlan(input.intent);
-  const name = ctx?.identity?.name ?? "notre équipe";
+  const name = ctx?.identity?.name ?? "our team";
+  const lastCandidate =
+    input.incomingCandidateReply ??
+    [...(input.conversation ?? [])].reverse().find((m) => m.role === "candidate")?.content ??
+    "";
+  const fr = (cheapDetectLang(lastCandidate) || ctx?.voice?.language || "en").match(/^fr|fran/i);
   const message: NextMessage = {
     channelHint: "email",
-    subject: `Un mot de ${name}`,
-    body: `Bonjour, je vous contacte de la part de ${name}. Seriez-vous ouvert·e à un court échange ?`,
+    subject: fr ? `Un mot de ${name}` : `A note from ${name}`,
+    body: fr
+      ? `Bonjour, je vous contacte de la part de ${name}. Seriez-vous ouvert à un court échange ?`
+      : `Hi, I'm reaching out from ${name}. Would you be open to a short chat?`,
   };
   const state: AgentState = input.priorState ?? {
     personaKey: ctx ? hashContext(ctx) : "persona_unknown",

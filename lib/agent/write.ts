@@ -118,36 +118,53 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult> {
   return { message: null, ok: false, error: res.error, calls: res.calls };
 }
 
-// Fallback déterministe par étape : message safe, court, ancré, jamais d'interdit.
+// Normalise une langue active en bucket de template ("fr" par défaut sinon "en").
+export function fallbackLang(language: string): "fr" | "en" {
+  return /^fr|fran[cç]/i.test(language) ? "fr" : "en";
+}
+
+// Fallback déterministe par étape : message safe, court, ancré, dans l'ACTIVE LANGUAGE,
+// et CONTEXT-AWARE — jamais de ré-introduction quand on est en milieu de conversation.
 export function fallbackMessage(args: WriteArgs): NextMessage {
-  const name =
-    args.pack.fields.find((f) => f.path === "identity.name")?.value ?? "notre équipe";
+  const fr = fallbackLang(args.voiceProfile.language) === "fr";
+  const name = args.pack.fields.find((f) => f.path === "identity.name")?.value ?? (fr ? "notre équipe" : "our team");
   const role = args.pack.fields.find((f) => f.path.startsWith("hiring.roles"))?.value;
+  const roleClause = role ? (fr ? `le poste de ${role}` : `the ${role} role`) : fr ? "ce rôle" : "this role";
 
   let body: string;
   switch (args.stage) {
     case "intro":
-      body = `Bonjour, je vous contacte de la part de ${name}${
-        role ? ` au sujet d'un poste de ${role}` : ""
-      }. Seriez-vous ouvert·e à en savoir plus ?`;
+      body = fr
+        ? `Bonjour, je vous contacte de la part de ${name}${role ? ` au sujet de ${roleClause}` : ""}. Seriez-vous ouvert à en savoir plus ?`
+        : `Hi, I'm reaching out from ${name}${role ? ` about ${roleClause}` : ""}. Would you be open to hearing a bit more?`;
       break;
     case "handle_objection":
-      body = `Merci pour votre franchise — je comprends votre point. Sans insister, puis-je vous demander ce qui rendrait une opportunité chez ${name} intéressante pour vous ?`;
+      body = fr
+        ? `Merci pour votre franchise, je comprends. Sans insister : qu'est-ce qui rendrait une opportunité chez ${name} intéressante pour vous ?`
+        : `Thanks for being straight with me — I understand. Without pushing: what would make an opportunity at ${name} worth it for you?`;
       break;
     case "propose_call":
     case "confirm_logistics":
-      body = `Si cela a du sens pour vous, je serais ravi·e d'organiser un court échange. Quelles seraient vos disponibilités ?`;
+      body = fr
+        ? `Si ça a du sens pour vous, je serais ravi d'organiser un court échange. Quelles seraient vos disponibilités ?`
+        : `If it makes sense for you, I'd be glad to set up a short call. What does your availability look like?`;
       break;
     case "reengage":
-      body = `Je me permets un dernier message depuis ${name} : si le moment n'est pas le bon, dites-le-moi simplement et je n'insisterai pas.`;
+      body = fr
+        ? `Un dernier mot de la part de ${name} : si le moment n'est pas le bon, dites-le-moi simplement et je n'insisterai pas.`
+        : `One last note from ${name}: if the timing isn't right, just tell me and I won't push.`;
       break;
-    default:
-      body = `Bonjour, un mot rapide de la part de ${name} — seriez-vous ouvert·e à un échange ?`;
+    default: // value_pitch et autres milieux de conversation : court, on-topic, pas de ré-intro
+      body = fr
+        ? `Pour rebondir : ce qui rend ${roleClause} chez ${name} pertinent, c'est l'impact concret et l'autonomie. Qu'est-ce qui compte le plus pour vous ?`
+        : `Picking up where we were: what makes ${roleClause} at ${name} worth a look is the real impact and ownership. What matters most to you?`;
   }
 
   return {
     channelHint: args.channelHint,
-    ...(args.channelHint === "email" ? { subject: `Un mot de ${name}` } : {}),
+    ...(args.channelHint === "email"
+      ? { subject: fr ? `Un mot de ${name}` : `A note from ${name}` }
+      : {}),
     body,
   };
 }

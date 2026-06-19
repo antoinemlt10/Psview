@@ -29,6 +29,8 @@ export interface InvariantContext {
   incomingReply?: string;
   mem: CandidateMemory;
   agentMem: AgentMemory;
+  hasHistory: boolean; // ≥1 message agent déjà envoyé (conversation ou priorState)
+  priorStage?: Stage; // dernier stage connu (priorState.plan.currentStage)
 }
 
 export interface InvariantResult {
@@ -41,6 +43,15 @@ export function applyInvariants(reason: ReasonOutput, ctx: InvariantContext): In
   const notes: string[] = [];
   let stage = reason.stage;
   let nextObjective = reason.nextObjective;
+
+  // 0) CONTINUITÉ : jamais de ré-introduction s'il y a un historique. Si REASON
+  //    renvoie "intro" alors qu'on a déjà parlé, on clamp sur le dernier stage connu.
+  if (stage === "intro" && ctx.hasHistory) {
+    stage = ctx.priorStage && ctx.priorStage !== "intro" ? ctx.priorStage : "reengage";
+    nextObjective =
+      "Poursuivre la conversation en cours (pas de ré-introduction — historique présent).";
+    notes.push(`invariant: pas de ré-intro avec historique → stage clampé sur « ${stage} ».`);
+  }
 
   // 1) Pas de proposition d'appel avant le tour 2, sauf demande explicite du candidat.
   if (CALL_STAGES.includes(stage) && ctx.turn < 2 && !candidateAskedForCall(ctx.incomingReply)) {
