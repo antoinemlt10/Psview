@@ -19,7 +19,7 @@ import {
   deriveStyleAdjustments,
 } from "./memory";
 import { runReason, cheapDetectLang } from "./reason";
-import { applyInvariants } from "./invariants";
+import { applyInvariants, candidateAskedForCall } from "./invariants";
 import { buildGroundingPack, buildForbiddenList } from "./grounding";
 import {
   runWrite,
@@ -29,7 +29,14 @@ import {
   fallbackLang,
   type WriteArgs,
 } from "./write";
-import { deterministicChecks, llmVerify, needsLlmVerify, type DeterministicCtx } from "./verify";
+import {
+  deterministicChecks,
+  llmVerify,
+  needsLlmVerify,
+  containsTerm,
+  hasSchedulingLanguage,
+  type DeterministicCtx,
+} from "./verify";
 import { defaultPlan } from "./state";
 
 function pushUnique(arr: string[], items: string[], cap = 40): string[] {
@@ -208,8 +215,23 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     // Limite de longueur DURE selon canal + type (hook = 1er message vs answer).
     const isHook = !hasHistory;
     const bodyLimit = channelLimit(reason.channelHint, isHook);
+
+    // Stage-gate du SCHEDULING : autorisé seulement en propose_call/confirm_logistics,
+    // ou si le candidat a explicitement demandé un appel à ce tour.
+    const schedulingAllowed =
+      reason.stage === "propose_call" ||
+      reason.stage === "confirm_logistics" ||
+      candidateAskedForCall(input.incomingCandidateReply);
+
+    // mustNotDo passé au writer = directives de REASON + répétitions promises évitées.
+    const mustNotDo = [...reason.mustNotDo, ...reason.avoidedRepetition];
+
     const writeArgs: WriteArgs = {
       nextObjective: reason.nextObjective,
+      decision: reason.decision,
+      mustDo: reason.mustDo,
+      mustNotDo,
+      schedulingAllowed,
       stage: reason.stage,
       channelHint: reason.channelHint,
       pack,
@@ -227,6 +249,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       voiceProfile,
       channelHint: reason.channelHint,
       bodyLimit,
+      schedulingAllowed,
     };
 
     let message: NextMessage;
@@ -243,10 +266,18 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       //    QUE si c'est ambigu (recoupement lexical avec un sujet banni / une info
       //    connue). Tour de réaction normal → 2 appels (reason + write). ──
       const isLengthViolation = (v: string) => v.startsWith("Body trop long");
+      // L'adhérence (le message a-t-il EXÉCUTÉ la décision ?) se vérifie sur un tour
+      // de réaction (historique présent) ; le 1er message à froid n'a rien à adhérer.
+      const adherenceCtx = {
+        decision: reason.decision,
+        mustDo: reason.mustDo,
+        mustNotDo,
+        avoidedRepetition: reason.avoidedRepetition,
+      };
       while (true) {
         let violations = deterministicChecks(message, vctx);
-        if (violations.length === 0 && needsLlmVerify(message, forbidden)) {
-          const lv = await llmVerify(message, forbidden);
+        if (violations.length === 0 && (hasHistory || needsLlmVerify(message, forbidden))) {
+          const lv = await llmVerify(message, forbidden, hasHistory ? adherenceCtx : undefined);
           calls += lv.calls;
           if (!lv.ok) errors.push("verify(llm): indisponible (laissé passer)");
           if (!lv.pass) violations = lv.violations;
@@ -281,9 +312,15 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 
     // ── 5) STATE UPDATE (déterministe) ──
     const newQuestions = extractQuestions(message.body);
-    const isProposal = reason.stage === "propose_call" || reason.stage === "confirm_logistics";
+    // Bonus : on journalise les MOVES réellement faits (mustDo exécutés + excuses/échange
+    // détectés dans le body) → ils deviennent des interdits durs au tour suivant.
+    const moves = detectMoves(message.body);
+    const isProposal =
+      reason.stage === "propose_call" ||
+      reason.stage === "confirm_logistics" ||
+      hasSchedulingLanguage(message.body);
     agentMemory = {
-      pointsMade: pushUnique(agentMemory.pointsMade, [reason.nextObjective]),
+      pointsMade: pushUnique(agentMemory.pointsMade, [...reason.mustDo, ...moves, reason.nextObjective]),
       questionsAsked: pushUnique(agentMemory.questionsAsked, newQuestions),
       proposalsMade: isProposal
         ? pushUnique(agentMemory.proposalsMade, [reason.nextObjective])
@@ -309,18 +346,13 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       counters: newCounters,
     };
 
-    // ── Trace (rend la boucle de feedback VISIBLE) ──
-    const avoidedRepetition =
-      reason.avoidedRepetition.length > 0
-        ? reason.avoidedRepetition
-        : deriveAvoided(forbidden);
-
+    // ── Trace MESURÉE sur le message final (jamais juste déclarée par REASON) ──
     const reasoning: Reasoning = {
       candidateSignals: reason.signals,
       decision: reason.decision,
       groundingUsed: pack.used,
-      constraintsRespected: [...reason.constraintsRespected, ...inv.notes],
-      avoidedRepetition,
+      constraintsRespected: measureConstraints(message, vctx, inv.notes),
+      avoidedRepetition: measureAvoided(message, forbidden),
       memoryUpdates: applied.summary,
     };
 
@@ -339,12 +371,41 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   }
 }
 
-function deriveAvoided(forbidden: ReturnType<typeof buildForbiddenList>): string[] {
+// Trace MESURÉE sur le message FINAL (pas déclarée par REASON) : on n'affiche un ✓
+// que si le message réel le confirme. Une trace qui ment est pire que pas de trace.
+function measureAvoided(msg: NextMessage, forbidden: ReturnType<typeof buildForbiddenList>): string[] {
+  const lower = `${msg.subject ?? ""}\n${msg.body}`.toLowerCase();
   const out: string[] = [];
-  for (const t of forbidden.bannedTopics) out.push(`n'a pas reproposé : « ${t} »`);
-  for (const f of forbidden.knownFacts) out.push(`n'a pas re-demandé : « ${f} »`);
-  for (const p of forbidden.pointsMade) out.push(`n'a pas répété : « ${p} »`);
-  return out;
+  for (const t of forbidden.bannedTopics) if (!containsTerm(lower, t)) out.push(`n'a pas reproposé : « ${t} »`);
+  for (const f of forbidden.knownFacts) if (!containsTerm(lower, f)) out.push(`n'a pas re-demandé : « ${f} »`);
+  for (const p of forbidden.pointsMade) if (!containsTerm(lower, p)) out.push(`n'a pas répété : « ${p} »`);
+  return out.slice(0, 8);
+}
+
+function measureConstraints(msg: NextMessage, vctx: DeterministicCtx, invNotes: string[]): string[] {
+  const haystack = `${msg.subject ?? ""}\n${msg.body}`;
+  const lower = haystack.toLowerCase();
+  const out = [...invNotes];
+  if (vctx.forbidden.dontSay.length && vctx.forbidden.dontSay.every((t) => !containsTerm(lower, t))) {
+    out.push("aucun terme proscrit (dontSay) utilisé");
+  }
+  if (!vctx.schedulingAllowed && !hasSchedulingLanguage(haystack)) {
+    out.push("pas de proposition d'appel/créneau (hors-stage)");
+  }
+  if (msg.body.length <= vctx.bodyLimit) out.push(`longueur respectée (${msg.body.length} ≤ ${vctx.bodyLimit})`);
+  for (const c of vctx.forbidden.constraints) out.push(`respecte la contrainte active : « ${c} »`);
+  return out.slice(0, 10);
+}
+
+// Bonus : journalise les vrais MOVES du message (excuses, proposition d'échange)
+// pour qu'ils ne soient pas répétés au tour suivant.
+function detectMoves(body: string): string[] {
+  const moves: string[] = [];
+  if (/\b(d[ée]sol[ée]|navr[ée]|excuse|pardon|sorry|apolog)/i.test(body)) {
+    moves.push("a présenté des excuses");
+  }
+  if (hasSchedulingLanguage(body)) moves.push("a proposé un échange/créneau");
+  return moves;
 }
 
 function catastrophicFallback(input: AgentInput, errors: string[], calls: number): AgentOutput {

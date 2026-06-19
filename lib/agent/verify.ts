@@ -18,7 +18,7 @@ function hasEmoji(s: string): boolean {
 // Présence d'un terme : pour un mot unique on borne sur les frontières de mot
 // (évite les faux positifs « ai » dans « travail »); pour une expression on garde
 // le substring (faible risque de collision).
-function containsTerm(hayLower: string, term: string): boolean {
+export function containsTerm(hayLower: string, term: string): boolean {
   const t = term.trim().toLowerCase();
   if (!t) return false;
   if (/^[\p{L}\p{N}]+$/u.test(t)) {
@@ -30,11 +30,20 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Détecte un langage de SCHEDULING (appel, créneau, horaire, jour, lien d'agenda) — fr+en.
+// Stems en préfixe (pas de \b final) pour attraper "available/scheduling/disponibilités/créneaux".
+const SCHEDULING_RE =
+  /\b(?:appel|rdv|rendez-?vous|cr[ée]neau|planifi|disponib|dispo|agenda|calend|call|meeting|schedul|slot|availab|calendly|cal\.com|zoom|lundi|mardi|mercredi|jeudi|vendredi|monday|tuesday|wednesday|thursday|friday)|\b\d{1,2}\s?(?:h|am|pm)\b|\b\d{1,2}:\d{2}\b/i;
+export function hasSchedulingLanguage(text: string): boolean {
+  return SCHEDULING_RE.test(text);
+}
+
 export interface DeterministicCtx {
   forbidden: ForbiddenList;
   voiceProfile: VoiceProfile;
   channelHint: ChannelHint;
   bodyLimit: number; // limite DURE de caractères (canal + hook/answer)
+  schedulingAllowed: boolean; // proposition d'appel/créneau autorisée ce tour ?
 }
 
 // VERIFY est déterministe par DÉFAUT. On ne paie l'appel LLM que si c'est AMBIGU :
@@ -82,6 +91,11 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
   const bracket = haystack.match(/\[[^\]\n]{1,40}\]/);
   if (bracket) violations.push(`Placeholder entre crochets interdit : « ${bracket[0]} ».`);
 
+  // 3c) Stage-gate du scheduling : pas de proposition d'appel/créneau hors-stage.
+  if (!ctx.schedulingAllowed && hasSchedulingLanguage(haystack)) {
+    violations.push("Proposition d'appel/créneau hors-stage (scheduling non autorisé ce tour).");
+  }
+
   // 4) Mémoire : reproposition d'un sujet banni (rejet/écarté actif).
   for (const topic of ctx.forbidden.bannedTopics) {
     if (containsTerm(lower, topic)) violations.push(`Repropose un sujet banni : « ${topic} ».`);
@@ -125,37 +139,61 @@ export interface LlmVerifyResult {
   calls: number;
 }
 
-// VERIFY LLM (modèle léger) — n'attrape QUE le sémantique que le code rate :
-// reproposition proche d'un rejet, re-demande d'une info connue, re-soulèvement
-// d'un sujet écarté, répétition d'un point. Appelé seulement si le code passe.
+export interface AdherenceCtx {
+  decision: string;
+  mustDo: string[];
+  mustNotDo: string[];
+  avoidedRepetition: string[]; // ce que REASON s'était engagé à éviter
+}
+
+// VERIFY LLM (modèle léger) — deux vérifications sémantiques que le code rate :
+//  (a) MÉMOIRE : reproposition proche d'un rejet, re-demande d'une info connue, redite ;
+//  (b) ADHÉRENCE : le message FINAL a-t-il exécuté la décision (mustDo) et évité les
+//      mustNotDo / répétitions promises ? Divergence → violations → révision.
 export async function llmVerify(
   msg: NextMessage,
   forbidden: ForbiddenList,
+  adherence?: AdherenceCtx,
 ): Promise<LlmVerifyResult> {
-  const needsCheck =
+  const needsMemory =
     forbidden.bannedTopics.length ||
     forbidden.knownFacts.length ||
     forbidden.pointsMade.length ||
     forbidden.questionsAsked.length;
-  if (!needsCheck) return { pass: true, violations: [], ok: true, calls: 0 };
+  const needsAdherence =
+    !!adherence && (adherence.mustDo.length > 0 || adherence.mustNotDo.length > 0);
+  if (!needsMemory && !needsAdherence) return { pass: true, violations: [], ok: true, calls: 0 };
 
   const system = [
-    "Tu es un vérificateur strict. On te donne un message et une liste d'interdits.",
-    "Détecte UNIQUEMENT : reproposition (même de loin) d'un sujet banni, re-demande d'une",
+    "Tu es un vérificateur strict du message FINAL d'un agent de recrutement.",
+    "(A) MÉMOIRE : détecte toute reproposition (même de loin) d'un sujet banni, re-demande d'une",
     "info déjà connue, re-soulèvement d'un sujet écarté, ou répétition d'un argument déjà servi.",
-    "Si rien de tout cela : pass=true. Sinon pass=false et liste les violations. Réponds via le tool.",
+    "(B) ADHÉRENCE : le message exécute-t-il CHAQUE point de À FAIRE ? Évite-t-il TOUT À NE PAS FAIRE",
+    "et toute répétition listée ? Une divergence (point À FAIRE manquant, ou À NE PAS FAIRE présent,",
+    "ex: re-décrit le rôle, re-présente des excuses, pousse un appel) = violation.",
+    "Si tout est respecté : pass=true. Sinon pass=false + violations précises. Réponds via le tool.",
   ].join(" ");
 
   const user = [
-    "MESSAGE :",
+    "MESSAGE FINAL :",
     `subject: ${msg.subject ?? "(aucun)"}`,
     `body: ${msg.body}`,
     "",
-    "INTERDITS :",
+    "INTERDITS MÉMOIRE :",
     `sujets bannis: ${JSON.stringify(forbidden.bannedTopics)}`,
     `infos connues (ne pas re-demander): ${JSON.stringify(forbidden.knownFacts)}`,
     `arguments déjà servis: ${JSON.stringify(forbidden.pointsMade)}`,
     `questions déjà posées: ${JSON.stringify(forbidden.questionsAsked)}`,
+    ...(adherence
+      ? [
+          "",
+          "DÉCISION À AVOIR EXÉCUTÉE :",
+          adherence.decision,
+          `À FAIRE: ${JSON.stringify(adherence.mustDo)}`,
+          `À NE PAS FAIRE: ${JSON.stringify(adherence.mustNotDo)}`,
+          `RÉPÉTITIONS À ÉVITER: ${JSON.stringify(adherence.avoidedRepetition)}`,
+        ]
+      : []),
   ].join("\n");
 
   const res = await callStructured({
@@ -163,7 +201,7 @@ export async function llmVerify(
     system,
     user,
     toolName: "verdict",
-    toolDescription: "Rend un verdict pass/violations sur le respect de la mémoire.",
+    toolDescription: "Rend un verdict pass/violations sur la mémoire ET l'adhérence à la décision.",
     schema: VerifyOutputSchema,
     maxTokens: MAX_TOKENS.verify,
     timeoutMs: TIMEOUTS.verify,

@@ -27,6 +27,10 @@ function emojiRule(v: VoiceProfile): string {
 
 export interface WriteArgs {
   nextObjective: string;
+  decision: string; // la décision complète de REASON — à EXÉCUTER
+  mustDo: string[]; // directives DO de ce tour
+  mustNotDo: string[]; // directives DON'T de ce tour
+  schedulingAllowed: boolean; // proposition d'appel/créneau autorisée ce tour ?
   stage: Stage;
   channelHint: ChannelHint;
   pack: GroundingPack;
@@ -40,10 +44,15 @@ export interface WriteArgs {
 
 const SYSTEM = [
   "Tu es le RÉDACTEUR de l'agent de recrutement. Tu N'ÉCRIS QUE le message.",
-  "Tu ne décides AUCUNE stratégie : l'objectif et l'étape te sont donnés.",
+  "Tu EXÉCUTES la DÉCISION qu'on te donne — tu n'improvises PAS et tu n'ajoutes RIEN",
+  "qui n'est pas demandé. Fais exactement ce qui est dans À FAIRE, évite tout ce qui est",
+  "dans À NE PAS FAIRE. Si une idée n'est ni demandée ni interdite, dans le doute ABSTIENS-toi.",
   "Tu ÉVITES ACTIVEMENT la liste d'interdits (sujets bannis, redites, termes proscrits).",
   "Tu n'as PAS le contexte d'entreprise brut : seulement le pack d'ancrage filtré ;",
   "tu dois utiliser ses VALEURS EXACTES pour rester spécifique, jamais générique.",
+  "",
+  "SCHEDULING : si la proposition d'appel n'est PAS autorisée ce tour, n'évoque NI appel,",
+  "NI créneau, NI horaire, NI jour, NI lien d'agenda. Réponds au fond sans pousser de rendez-vous.",
   "",
   "LONGUEUR (CONTRAINTE DURE) : le body NE DOIT PAS dépasser la limite indiquée.",
   "Priorise l'essentiel, coupe le secondaire, reste sous la limite. Mieux vaut court et net.",
@@ -83,7 +92,17 @@ function buildUser(args: WriteArgs): string {
       : "",
     "",
     `ÉTAPE : ${args.stage}`,
-    `OBJECTIF DU MESSAGE : ${args.nextObjective}`,
+    `DÉCISION À EXÉCUTER (ne dévie pas) : ${args.decision}`,
+    `OBJECTIF : ${args.nextObjective}`,
+    args.mustDo.length
+      ? `À FAIRE ce tour-ci (exécute CHAQUE point) :\n${args.mustDo.map((s) => `  - ${s}`).join("\n")}`
+      : "",
+    args.mustNotDo.length
+      ? `À NE PAS FAIRE ce tour-ci (interdits DURS) :\n${args.mustNotDo.map((s) => `  - ${s}`).join("\n")}`
+      : "",
+    args.schedulingAllowed
+      ? "SCHEDULING : autorisé ce tour (tu peux proposer un échange/créneau)."
+      : "SCHEDULING : INTERDIT ce tour — aucun appel, créneau, horaire, jour ni lien d'agenda.",
     `CANAL : ${args.channelHint} — body ≤ ${args.bodyLimit} caractères (CONTRAINTE DURE : priorise, ne dépasse pas)${
       args.channelHint === "email" ? " ; fournis aussi un subject" : " ; pas de subject"
     }.`,

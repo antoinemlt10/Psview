@@ -35,6 +35,9 @@ export const ReasonOutputSchema = z.object({
   // Langue de la CONVERSATION (dernier message candidat, sinon historique).
   // Code court : "fr", "en", "es"… "" si aucun message candidat.
   detectedLanguage: z.string(),
+  // Directives EXPLICITES pour le writer (il exécute, il n'improvise pas).
+  mustDo: z.array(z.string()), // 1-3 actions concrètes à exécuter CE tour
+  mustNotDo: z.array(z.string()), // ce qu'il ne faut PAS faire CE tour
 });
 export type ReasonOutput = z.infer<typeof ReasonOutputSchema>;
 
@@ -117,6 +120,10 @@ function buildUser(input: AgentInput, mem: CandidateMemory, agentMem: AgentMemor
     "constraintsRespected / avoidedRepetition = preuves lisibles de la boucle de feedback.",
     "detectedLanguage = code court (fr/en/es/…) de la langue du DERNIER message candidat,",
     "sinon de l'historique ; \"\" si aucun message candidat. L'agent DOIT répondre dans cette langue.",
+    "mustDo = 1 à 3 directives CONCRÈTES à exécuter ce tour-ci (ex: « répondre pourquoi le profil",
+    "colle au rôle », « poser UNE question sur le parcours »). mustNotDo = ce qu'il ne faut PAS faire",
+    "ce tour-ci (ex: « proposer un appel ou un créneau », « re-présenter des excuses », « re-décrire",
+    "le rôle déjà couvert », « re-poser une question déjà posée »). Le writer EXÉCUTE ces directives.",
   ].join("\n");
 }
 
@@ -206,5 +213,12 @@ export function fallbackReason(input: AgentInput, mem: CandidateMemory): ReasonO
         [...input.conversation].reverse().find((m) => m.role === "candidate")?.content ??
         "",
     ),
+    mustDo:
+      stage === "intro"
+        ? ["ouvrir le contact en ancrant sur l'entreprise et le rôle"]
+        : stage === "handle_objection"
+          ? ["accuser réception de la réticence", "répondre brièvement sans re-pitcher"]
+          : ["répondre à ce que le candidat vient de dire", "poser une question utile"],
+    mustNotDo: ["proposer un appel ou un créneau", "re-présenter des excuses", "re-décrire ce qui est déjà couvert"],
   };
 }

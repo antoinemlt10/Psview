@@ -4,7 +4,7 @@ import { enforcedEntries } from "./memory";
 
 const CALL_STAGES: Stage[] = ["propose_call", "confirm_logistics"];
 
-function candidateAskedForCall(reply: string | undefined): boolean {
+export function candidateAskedForCall(reply: string | undefined): boolean {
   if (!reply) return false;
   const t = reply.toLowerCase();
   return [
