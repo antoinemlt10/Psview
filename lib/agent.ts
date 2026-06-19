@@ -64,5 +64,6 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     },
     // Full engine state, opaque to the UI, echoed back next turn as priorState.
     state: out.state as unknown as Record<string, unknown>,
+    meta: out.meta,
   };
 }

@@ -95,4 +95,6 @@ export interface AgentOutput {
     body: string;
   };
   state?: Record<string, unknown>;
+  // Diagnostics du moteur (appels LLM réellement déclenchés, ok/fallback).
+  meta?: { ok: boolean; llmCallsFired: number; errors: string[]; model: string };
 }

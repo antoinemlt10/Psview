@@ -39,9 +39,14 @@ export function ReasoningPanel({ output }: { output: AgentOutput }) {
         <span className="inline-block h-2.5 w-2.5 rounded-[3px] bg-ink" />
         <h2 className="font-display text-base text-ink">Reasoning</h2>
         <span className="mono ml-auto text-[11px] uppercase tracking-wide text-muted">
-          stage · {plan.currentStage}
+          {output.meta ? `${output.meta.llmCallsFired} LLM · ` : ""}stage · {plan.currentStage}
         </span>
       </header>
+      {output.meta && !output.meta.ok && (
+        <p className="mono rounded-lg border border-line-2 bg-paper-2 px-2.5 py-1.5 text-[11px] text-ink-2">
+          fallback — {output.meta.errors[0] ?? "dégradé"}
+        </p>
+      )}
 
       {/* SIGNALS */}
       <section>
