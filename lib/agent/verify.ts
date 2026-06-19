@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ChannelHint, NextMessage, VoiceProfile } from "./types";
 import type { ForbiddenList } from "./grounding";
 import { callStructured } from "./llm";
-import { MODELS, MAX_TOKENS, TIMEOUTS, CAPS } from "./config";
+import { MODELS, MAX_TOKENS, TIMEOUTS } from "./config";
 
 // © ® ™ sont Extended_Pictographic mais PAS des emojis : on les exclut.
 const NON_EMOJI = new Set([0xa9, 0xae, 0x2122]);
@@ -34,6 +34,7 @@ export interface DeterministicCtx {
   forbidden: ForbiddenList;
   voiceProfile: VoiceProfile;
   channelHint: ChannelHint;
+  bodyLimit: number; // limite DURE de caractères (canal + hook/answer)
 }
 
 // VERIFY est déterministe par DÉFAUT. On ne paie l'appel LLM que si c'est AMBIGU :
@@ -71,12 +72,15 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
     violations.push("Emoji présent alors que la politique est 'none'.");
   }
 
-  // 3) Longueur cohérente avec le canal.
-  const max = CAPS.maxBodyChars[ctx.channelHint] ?? 1800;
-  if (msg.body.length > max) {
-    violations.push(`Body trop long (${msg.body.length} > ${max} pour ${ctx.channelHint}).`);
+  // 3) Longueur cohérente avec le canal (limite DURE passée par l'orchestrateur).
+  if (msg.body.length > ctx.bodyLimit) {
+    violations.push(`Body trop long (${msg.body.length} > ${ctx.bodyLimit} pour ${ctx.channelHint}).`);
   }
   if (msg.body.trim().length === 0) violations.push("Body vide.");
+
+  // 3b) Placeholders entre crochets interdits ([First Name], [Your Name], …).
+  const bracket = haystack.match(/\[[^\]\n]{1,40}\]/);
+  if (bracket) violations.push(`Placeholder entre crochets interdit : « ${bracket[0]} ».`);
 
   // 4) Mémoire : reproposition d'un sujet banni (rejet/écarté actif).
   for (const topic of ctx.forbidden.bannedTopics) {

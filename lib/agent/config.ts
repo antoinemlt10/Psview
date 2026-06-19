@@ -3,6 +3,7 @@
 //   - Sonnet-class pour REASON + WRITE + persona : "claude-sonnet-4-6"
 //   - Haiku-class pour VERIFY (modèle léger)     : "claude-haiku-4-5"
 // On ne devine pas les IDs : ce sont les aliases stables courants.
+import type { ChannelHint } from "./types";
 
 export const MODELS = {
   reason: "claude-sonnet-4-6",
@@ -34,9 +35,20 @@ export const CAPS = {
   maxRevisions: 1,
   // Retry sur échec de parse/schéma Zod d'une sortie LLM structurée.
   schemaRetries: 1,
-  // Longueur max du body par canal (caractères).
-  maxBodyChars: { email: 1800, linkedin: 750, sms: 320 } as Record<string, number>,
+  // Longueur max du body par canal (caractères), right-sized.
+  // hook = 1er message (accroche, plus court) ; answer = message-réponse (plus long).
+  maxBodyChars: {
+    email: { hook: 2000, answer: 2400 },
+    linkedin: { hook: 900, answer: 1500 },
+    sms: { hook: 320, answer: 320 },
+  },
 } as const;
+
+// Limite de caractères du body selon le canal et le type de message (accroche vs réponse).
+export function channelLimit(channel: ChannelHint, isHook: boolean): number {
+  const c = CAPS.maxBodyChars[channel] ?? CAPS.maxBodyChars.email;
+  return isHook ? c.hook : c.answer;
+}
 
 // Le modèle exposé dans meta.model.
 export const META_MODEL = MODELS.reason;

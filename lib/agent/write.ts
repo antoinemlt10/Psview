@@ -3,7 +3,7 @@ import type { ChannelHint, NextMessage, Stage, VoiceProfile } from "./types";
 import type { GroundingPack, ForbiddenList } from "./grounding";
 import { renderForbiddenList } from "./grounding";
 import { callStructured } from "./llm";
-import { MODELS, MAX_TOKENS, TIMEOUTS, CAPS } from "./config";
+import { MODELS, MAX_TOKENS, TIMEOUTS } from "./config";
 
 const CHANNELS: [ChannelHint, ...ChannelHint[]] = ["email", "linkedin", "sms"];
 
@@ -33,6 +33,8 @@ export interface WriteArgs {
   voiceProfile: VoiceProfile;
   forbidden: ForbiddenList;
   persona: string;
+  candidateName?: string; // prénom réel du candidat, pour la salutation
+  bodyLimit: number; // limite DURE de caractères du body
   critique?: string; // pour la révision
 }
 
@@ -43,12 +45,21 @@ const SYSTEM = [
   "Tu n'as PAS le contexte d'entreprise brut : seulement le pack d'ancrage filtré ;",
   "tu dois utiliser ses VALEURS EXACTES pour rester spécifique, jamais générique.",
   "",
+  "LONGUEUR (CONTRAINTE DURE) : le body NE DOIT PAS dépasser la limite indiquée.",
+  "Priorise l'essentiel, coupe le secondaire, reste sous la limite. Mieux vaut court et net.",
+  "",
+  "PLACEHOLDERS STRICTEMENT INTERDITS : n'écris JAMAIS de crochets [ … ] ni de gabarit",
+  "type [First Name], [Your Name], [Company], [rôle]. Si une info manque, reformule sans elle.",
+  "SALUTATION : utilise le PRÉNOM du candidat s'il est fourni ; sinon n'utilise AUCUN nom",
+  "(ouverture sans nom), surtout pas un nom inventé ni un placeholder.",
+  "SIGNATURE : signe avec le nom du persona s'il en a un ; sinon NE SIGNE PAS du tout.",
+  "",
   "BARÈME DE REGISTRE — applique STRICTEMENT celui de la formality du message :",
   "- formal : vouvoiement, phrases complètes, zéro contraction familière, zéro emoji.",
-  "    Ouverture type « Bonjour [Nom], » ou « Dr. [Nom], ».",
+  "    Ouverture : « Bonjour » suivi du prénom du candidat (ou « Bonjour, » sans nom).",
   "- neutral : professionnel mais accessible, vouvoiement par défaut, direct sans raideur.",
   "- casual : chaleureux mais PROPRE — un·e collègue sympa qui écrit vite, JAMAIS ado/texto.",
-  "    Autorisé : tutoiement, contractions naturelles ; ouverture « Salut [prénom], » ou « [prénom], ».",
+  "    Autorisé : tutoiement, contractions naturelles ; ouverture « Salut » + prénom (ou sans nom).",
   "    INTERDIT en casual : ouvertures « Yo », « Hey yo », « Wesh », « Coucou » ;",
   "    argot (« ouais », « grave », « chiant », « trop stylé ») ; ponctuation « !!! » / « ??? ».",
   "EMOJI : même en 'liberal', 1–2 emojis qui PONCTUENT, jamais un par ligne.",
@@ -57,12 +68,14 @@ const SYSTEM = [
 ].join("\n");
 
 function buildUser(args: WriteArgs): string {
-  const maxChars = CAPS.maxBodyChars[args.channelHint] ?? 1800;
   const parts = [
     `PERSONA (voix à incarner) : ${args.persona}`,
     `VOIX : formality=${args.voiceProfile.formality}, langue=${args.voiceProfile.language}. ${emojiRule(
       args.voiceProfile,
     )}`,
+    args.candidateName
+      ? `PRÉNOM CANDIDAT : ${args.candidateName} (à utiliser dans la salutation).`
+      : "PRÉNOM CANDIDAT : inconnu — n'utilise AUCUN nom (jamais de placeholder type [First Name]).",
     args.voiceProfile.styleAdjustments.length
       ? `AJUSTEMENTS DE STYLE (feedback candidat, à appliquer) :\n${args.voiceProfile.styleAdjustments
           .map((s) => `  - ${s}`)
@@ -71,9 +84,9 @@ function buildUser(args: WriteArgs): string {
     "",
     `ÉTAPE : ${args.stage}`,
     `OBJECTIF DU MESSAGE : ${args.nextObjective}`,
-    `CANAL : ${args.channelHint} (≤ ${maxChars} caractères pour le body${
+    `CANAL : ${args.channelHint} — body ≤ ${args.bodyLimit} caractères (CONTRAINTE DURE : priorise, ne dépasse pas)${
       args.channelHint === "email" ? " ; fournis aussi un subject" : " ; pas de subject"
-    }).`,
+    }.`,
     "",
     "PACK D'ANCRAGE (valeurs EXACTES à utiliser — pas d'invention) :",
     ...args.pack.fields.map((f) => `  - ${f.path} = ${f.value}`),
@@ -86,12 +99,12 @@ function buildUser(args: WriteArgs): string {
       "",
       "RÉVISION DEMANDÉE — la version précédente a échoué la vérification :",
       args.critique,
-      "Réécris le message en corrigeant exactement ces points.",
+      "Réécris le message en corrigeant exactement ces points (et reste sous la limite).",
     );
   }
   parts.push(
     "",
-    "Écris le message final maintenant (langue = " + args.voiceProfile.language + ").",
+    `Écris le message final maintenant, en ${args.voiceProfile.language}, sous ${args.bodyLimit} caractères, sans aucun placeholder.`,
   );
   return parts.filter(Boolean).join("\n");
 }
@@ -116,6 +129,56 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult> {
   });
   if (res.ok) return { message: res.value, ok: true, calls: res.calls };
   return { message: null, ok: false, error: res.error, calls: res.calls };
+}
+
+// ── Passe de COMPRESSION dédiée (sur dépassement de longueur) ──
+// Réduit le message sous la limite en gardant le fond — PAS un template générique.
+const CompressSchema = z.object({ subject: z.string().optional(), body: z.string() });
+
+export interface CompressResult {
+  message: { subject?: string; body: string } | null;
+  calls: number;
+}
+
+export async function runCompress(args: {
+  subject?: string;
+  body: string;
+  limit: number;
+  voiceProfile: VoiceProfile;
+}): Promise<CompressResult> {
+  const res = await callStructured({
+    model: MODELS.write,
+    system: [
+      "Tu condenses un message de recrutement existant. NE CHANGE PAS le fond ni l'ancrage concret.",
+      `Réduis le BODY sous ${args.limit} caractères : coupe le secondaire, garde l'essentiel et l'appel à l'action.`,
+      `Reste dans la MÊME langue (${args.voiceProfile.language}). Aucun placeholder entre crochets. Pas de ré-introduction.`,
+      "Réponds UNIQUEMENT via le tool fourni.",
+    ].join("\n"),
+    user: [
+      `Limite : ${args.limit} caractères pour le body.`,
+      `SUBJECT actuel : ${args.subject ?? "(aucun)"}`,
+      `BODY actuel (${args.body.length} caractères) :`,
+      args.body,
+    ].join("\n"),
+    toolName: "compress_message",
+    toolDescription: "Renvoie une version condensée du message, sous la limite de caractères.",
+    schema: CompressSchema,
+    maxTokens: MAX_TOKENS.write,
+    timeoutMs: TIMEOUTS.write,
+  });
+  return res.ok ? { message: res.value, calls: res.calls } : { message: null, calls: res.calls };
+}
+
+// Troncature propre à la frontière de phrase (dernier recours, déterministe).
+export function truncateToSentence(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const slice = text.slice(0, limit);
+  const sentenceEnd = slice.match(/^[\s\S]*[.!?](?=\s|$)/);
+  if (sentenceEnd && sentenceEnd[0].trim().length >= Math.min(60, Math.floor(limit * 0.4))) {
+    return sentenceEnd[0].trim();
+  }
+  const lastSpace = slice.lastIndexOf(" ");
+  return (lastSpace > 0 ? slice.slice(0, lastSpace) : slice).trim() + "…";
 }
 
 // Normalise une langue active en bucket de template ("fr" par défaut sinon "en").

@@ -9,7 +9,7 @@ import type {
   Plan,
   Reasoning,
 } from "./types";
-import { META_MODEL, CAPS } from "./config";
+import { META_MODEL, CAPS, channelLimit } from "./config";
 import { hashContext, getPersonality, deriveVoiceProfile, fallbackPersonality } from "./persona";
 import {
   emptyCandidateMemory,
@@ -21,7 +21,14 @@ import {
 import { runReason, cheapDetectLang } from "./reason";
 import { applyInvariants } from "./invariants";
 import { buildGroundingPack, buildForbiddenList } from "./grounding";
-import { runWrite, fallbackMessage, fallbackLang, type WriteArgs } from "./write";
+import {
+  runWrite,
+  runCompress,
+  truncateToSentence,
+  fallbackMessage,
+  fallbackLang,
+  type WriteArgs,
+} from "./write";
 import { deterministicChecks, llmVerify, needsLlmVerify, type DeterministicCtx } from "./verify";
 import { defaultPlan } from "./state";
 
@@ -73,6 +80,39 @@ function safeFallback(args: WriteArgs, vctx: DeterministicCtx): NextMessage {
     body: fr
       ? `Un mot rapide de la part de ${name}. Pouvons-nous en échanger ?`
       : `A quick note from ${name}. Could we connect about it?`,
+  };
+}
+
+// Dépassement de longueur : on NE tombe PAS en template générique. On tente une
+// passe de COMPRESSION dédiée (garde le fond), puis une troncature propre à la
+// phrase en dernier recours. Le message d'origine a déjà passé tous les autres
+// checks (longueur seule) → la troncature ne peut pas réintroduire d'interdit.
+async function enforceLength(
+  message: NextMessage,
+  vctx: DeterministicCtx,
+): Promise<{ message: NextMessage; calls: number }> {
+  if (message.body.length <= vctx.bodyLimit) return { message, calls: 0 };
+
+  const c = await runCompress({
+    subject: message.subject,
+    body: message.body,
+    limit: vctx.bodyLimit,
+    voiceProfile: vctx.voiceProfile,
+  });
+  if (c.message) {
+    const candidate: NextMessage = {
+      channelHint: vctx.channelHint,
+      subject: c.message.subject ?? message.subject,
+      body: c.message.body,
+    };
+    if (deterministicChecks(candidate, vctx).length === 0) {
+      return { message: candidate, calls: c.calls };
+    }
+  }
+  // Dernier recours déterministe : troncature propre du message d'origine (conforme sauf longueur).
+  return {
+    message: { ...message, body: truncateToSentence(message.body, vctx.bodyLimit) },
+    calls: c.calls,
   };
 }
 
@@ -165,6 +205,9 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     const forbidden = buildForbiddenList(ctx, candidateMemory, agentMemory);
 
     // ── 3) WRITE (1 appel LLM, modèle fort) ──
+    // Limite de longueur DURE selon canal + type (hook = 1er message vs answer).
+    const isHook = !hasHistory;
+    const bodyLimit = channelLimit(reason.channelHint, isHook);
     const writeArgs: WriteArgs = {
       nextObjective: reason.nextObjective,
       stage: reason.stage,
@@ -173,11 +216,18 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       voiceProfile,
       forbidden,
       persona: personality.persona,
+      candidateName: input.candidate?.name,
+      bodyLimit,
     };
 
     // Contexte de vérification, partagé par VERIFY et par le fallback (qui est
     // lui aussi vérifié+assaini : jamais de message non vérifié qui sort).
-    const vctx = { forbidden, voiceProfile, channelHint: reason.channelHint };
+    const vctx: DeterministicCtx = {
+      forbidden,
+      voiceProfile,
+      channelHint: reason.channelHint,
+      bodyLimit,
+    };
 
     let message: NextMessage;
     let revisions = 0;
@@ -192,6 +242,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       // ── 4) VERIFY — DÉTERMINISTE par défaut. L'appel LLM (3e appel) n'est payé
       //    QUE si c'est ambigu (recoupement lexical avec un sujet banni / une info
       //    connue). Tour de réaction normal → 2 appels (reason + write). ──
+      const isLengthViolation = (v: string) => v.startsWith("Body trop long");
       while (true) {
         let violations = deterministicChecks(message, vctx);
         if (violations.length === 0 && needsLlmVerify(message, forbidden)) {
@@ -202,6 +253,15 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
         }
         if (violations.length === 0) break; // message vérifié → on l'expédie
 
+        // LONGUEUR SEULE → compression dédiée puis troncature propre (PAS de générique).
+        if (violations.every(isLengthViolation)) {
+          const enf = await enforceLength(message, vctx);
+          calls += enf.calls;
+          message = enf.message; // garanti ≤ limite, conforme aux autres checks
+          break;
+        }
+
+        // Autres violations (placeholders, dontSay, sujet banni, redite) → 1 révision.
         if (revisions >= CAPS.maxRevisions) {
           errors.push(`verify: échec après révision (${violations.join(" | ")}) → fallback`);
           message = safeFallback(writeArgs, vctx);
@@ -210,13 +270,12 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
         revisions++;
         const rw = await runWrite({ ...writeArgs, critique: violations.join("\n") });
         calls += rw.calls;
-        if (rw.ok && rw.message) {
-          message = rw.message;
-        } else {
+        if (!rw.ok || !rw.message) {
           errors.push(`révision write: ${rw.error ?? "échec"} → fallback`);
           message = safeFallback(writeArgs, vctx);
           break;
         }
+        message = rw.message;
       }
     }
 
