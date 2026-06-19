@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Typography — the brand concept, encoded in the type system:
+     - serif (Newsreader) = "PsView speaking" → logo, all titles/display,
+       the persona name, AND the agent's message body + subject.
+     - grotesk (Geist)    = body copy, labels, form fields, nav, button text.
+     - mono (Geist Mono)  = reasoning data (signal values, stage keys, grounding).
+     --font-serif is provided by next/font (Newsreader) on the <html> element. */
+  --font-grotesk: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Light surfaces — airy, executive, monochrome */
+  --paper: #ffffff;
+  --paper-2: #fafafa;
+  --surface: #ffffff;
+  --line: #e6e6e6;
+  --line-2: #d6d6d6;
+  --ink: #0d0d0d;
+  --ink-2: #6b6b6b;
+  --muted: #9b9b9b;
+
+  /* Dark surfaces — hero, CTA band, stat blocks (near-black) */
+  --ink-bg: #0b0b0c;
+  --ink-bg-2: #141416;
+  --on-dark: #f5f5f5;
+  --on-dark-2: #a6a6a6;
+  --line-dark: rgba(255, 255, 255, 0.12);
+}
+
+* {
+  border-color: var(--line);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-grotesk);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Visible keyboard focus — monochrome */
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* The agent's voice — the brand's serif */
+.voice {
+  font-family: var(--font-serif), Georgia, serif;
+  font-feature-settings: "liga" 1, "kern" 1;
+}
+
+.font-display {
+  font-family: var(--font-serif), Georgia, serif;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* Eyebrow / data label — sans, uppercase, tracked, grey */
+.eyebrow {
+  font-family: var(--font-grotesk);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+  color: var(--muted);
+}
