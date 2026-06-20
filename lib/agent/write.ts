@@ -47,6 +47,9 @@ const SYSTEM = [
   "Tu EXÉCUTES la DÉCISION qu'on te donne — tu n'improvises PAS et tu n'ajoutes RIEN",
   "qui n'est pas demandé. Fais exactement ce qui est dans À FAIRE, évite tout ce qui est",
   "dans À NE PAS FAIRE. Si une idée n'est ni demandée ni interdite, dans le doute ABSTIENS-toi.",
+  "Tu ne connais PAS l'objectif global de la campagne (ex: « décrocher un appel/meeting ») :",
+  "ce n'est pas ton rôle de faire avancer le funnel. Le planner décide quand proposer un appel ;",
+  "toi, tu rends UNIQUEMENT le message de ce tour. N'avance JAMAIS de toi-même vers un rendez-vous.",
   "Tu ÉVITES ACTIVEMENT la liste d'interdits (sujets bannis, redites, termes proscrits).",
   "Tu n'as PAS le contexte d'entreprise brut : seulement le pack d'ancrage filtré ;",
   "tu dois utiliser ses VALEURS EXACTES pour rester spécifique, jamais générique.",
@@ -150,45 +153,7 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult> {
   return { message: null, ok: false, error: res.error, calls: res.calls };
 }
 
-// ── Passe de COMPRESSION dédiée (sur dépassement de longueur) ──
-// Réduit le message sous la limite en gardant le fond — PAS un template générique.
-const CompressSchema = z.object({ subject: z.string().optional(), body: z.string() });
-
-export interface CompressResult {
-  message: { subject?: string; body: string } | null;
-  calls: number;
-}
-
-export async function runCompress(args: {
-  subject?: string;
-  body: string;
-  limit: number;
-  voiceProfile: VoiceProfile;
-}): Promise<CompressResult> {
-  const res = await callStructured({
-    model: MODELS.write,
-    system: [
-      "Tu condenses un message de recrutement existant. NE CHANGE PAS le fond ni l'ancrage concret.",
-      `Réduis le BODY sous ${args.limit} caractères : coupe le secondaire, garde l'essentiel et l'appel à l'action.`,
-      `Reste dans la MÊME langue (${args.voiceProfile.language}). Aucun placeholder entre crochets. Pas de ré-introduction.`,
-      "Réponds UNIQUEMENT via le tool fourni.",
-    ].join("\n"),
-    user: [
-      `Limite : ${args.limit} caractères pour le body.`,
-      `SUBJECT actuel : ${args.subject ?? "(aucun)"}`,
-      `BODY actuel (${args.body.length} caractères) :`,
-      args.body,
-    ].join("\n"),
-    toolName: "compress_message",
-    toolDescription: "Renvoie une version condensée du message, sous la limite de caractères.",
-    schema: CompressSchema,
-    maxTokens: MAX_TOKENS.write,
-    timeoutMs: TIMEOUTS.write,
-  });
-  return res.ok ? { message: res.value, calls: res.calls } : { message: null, calls: res.calls };
-}
-
-// Troncature propre à la frontière de phrase (dernier recours, déterministe).
+// Troncature propre à la frontière de phrase (utilisée par la réparation déterministe).
 export function truncateToSentence(text: string, limit: number): string {
   if (text.length <= limit) return text;
   const slice = text.slice(0, limit);

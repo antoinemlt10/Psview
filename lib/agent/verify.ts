@@ -3,6 +3,7 @@ import type { ChannelHint, NextMessage, VoiceProfile } from "./types";
 import type { ForbiddenList } from "./grounding";
 import { callStructured } from "./llm";
 import { MODELS, MAX_TOKENS, TIMEOUTS } from "./config";
+import { truncateToSentence } from "./write";
 
 // © ® ™ sont Extended_Pictographic mais PAS des emojis : on les exclut.
 const NON_EMOJI = new Set([0xa9, 0xae, 0x2122]);
@@ -212,4 +213,85 @@ export async function llmVerify(
   }
   // Si le vérificateur LLM échoue, on ne BLOQUE pas (le code a déjà passé) : on laisse passer.
   return { pass: true, violations: [], ok: false, calls: res.calls };
+}
+
+// ── RÉPARATION CHIRURGICALE DÉTERMINISTE (0 LLM) ──
+// Au lieu de régénérer-puis-stub sur une violation réparable, on EXCISE la cause :
+// phrases de scheduling hors-stage, sujets bannis, questions déjà posées ;
+// placeholders, termes proscrits, dérives casual, emojis ; troncature pour la
+// longueur. Le hook + la question survivent. Déterministe → converge en 1 passe.
+function splitSentences(text: string): string[] {
+  return text.split(/(?<=[.!?])\s+/);
+}
+function stripEmojiChars(s: string): string {
+  let out = "";
+  for (const ch of s) {
+    const cp = ch.codePointAt(0);
+    if (cp !== undefined && NON_EMOJI.has(cp)) {
+      out += ch;
+      continue;
+    }
+    if (/\p{Extended_Pictographic}/u.test(ch)) continue;
+    out += ch;
+  }
+  return out;
+}
+function tidy(s: string): string {
+  return s
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+([.,!?;:])/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function repairMessage(msg: NextMessage, ctx: DeterministicCtx): NextMessage {
+  let body = msg.body;
+  let subject = msg.subject;
+
+  const dropSentence = (pred: (s: string) => boolean) => {
+    body = splitSentences(body)
+      .filter((s) => s.trim() && !pred(s))
+      .join(" ");
+  };
+
+  // 1) Scheduling hors-stage → phrases retirées (le hook / la question restent).
+  if (!ctx.schedulingAllowed) dropSentence((s) => hasSchedulingLanguage(s));
+  // 2) Sujets bannis reproposés → phrases retirées.
+  for (const topic of ctx.forbidden.bannedTopics) {
+    dropSentence((s) => containsTerm(s.toLowerCase(), topic));
+  }
+  // 3) Questions déjà posées (verbatim) → phrases retirées.
+  for (const q of ctx.forbidden.questionsAsked) {
+    const ql = q.toLowerCase();
+    if (ql.trim()) dropSentence((s) => s.toLowerCase().includes(ql));
+  }
+  // 4) Placeholders [..] retirés.
+  const noBracket = (s: string) => s.replace(/\s*\[[^\]\n]{1,40}\]\s*/g, " ");
+  body = noBracket(body);
+  if (subject) subject = noBracket(subject);
+  // 5) Termes proscrits (dontSay) retirés (frontière de mot).
+  for (const t of ctx.forbidden.dontSay) {
+    const term = t.trim();
+    if (!term) continue;
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(term)}(?![\\p{L}\\p{N}])`, "giu");
+    body = body.replace(re, "");
+    if (subject) subject = subject.replace(re, "");
+  }
+  // 6) Registre casual : ouverture ado / argot / ponctuation excessive.
+  if (ctx.voiceProfile.formality === "casual") {
+    body = body.replace(/^\s*(?:yo|hey\s+yo|wesh|coucou)\b[\s,!?-]*/i, "");
+    for (const slang of ["ouais", "grave", "chiant", "trop stylé"]) {
+      const re = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(slang)}(?![\\p{L}\\p{N}])`, "giu");
+      body = body.replace(re, "");
+    }
+    body = body.replace(/!{2,}/g, "!").replace(/\?{2,}/g, "?");
+  }
+  // 7) Emoji interdit → retirés.
+  if (ctx.voiceProfile.emojiUse === "none") body = stripEmojiChars(body);
+  // 8) Nettoyage + longueur (troncature à la phrase).
+  body = tidy(body);
+  if (subject) subject = tidy(subject);
+  if (body.length > ctx.bodyLimit) body = truncateToSentence(body, ctx.bodyLimit);
+
+  return { channelHint: ctx.channelHint, subject: subject || undefined, body };
 }

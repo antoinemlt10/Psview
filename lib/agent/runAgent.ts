@@ -21,20 +21,14 @@ import {
 import { runReason, cheapDetectLang } from "./reason";
 import { applyInvariants, candidateAskedForCall } from "./invariants";
 import { buildGroundingPack, buildForbiddenList } from "./grounding";
-import {
-  runWrite,
-  runCompress,
-  truncateToSentence,
-  fallbackMessage,
-  fallbackLang,
-  type WriteArgs,
-} from "./write";
+import { runWrite, fallbackMessage, fallbackLang, type WriteArgs } from "./write";
 import {
   deterministicChecks,
   llmVerify,
   needsLlmVerify,
   containsTerm,
   hasSchedulingLanguage,
+  repairMessage,
   type DeterministicCtx,
 } from "./verify";
 import { defaultPlan } from "./state";
@@ -57,70 +51,15 @@ function extractQuestions(body: string): string[] {
     .map((s) => s.slice(0, 200));
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// Fallback déterministe TOUJOURS vérifié : si le template viole un interdit
-// (dontSay/sujet banni), on l'assainit, puis on tombe sur un message ultra-générique.
-// Garantit : jamais de message non vérifié qui sort, même par la voie de repli.
+// Repli CATASTROPHIQUE uniquement (WRITE n'a produit AUCUN draft : timeout / parse /
+// sortie vide). On part du template d'étape (stage + langue) puis on le RÉPARE de
+// façon déterministe. Aucun stub générique de conversation ici.
 function safeFallback(args: WriteArgs, vctx: DeterministicCtx): NextMessage {
-  let msg = fallbackMessage(args);
-  if (deterministicChecks(msg, vctx).length === 0) return msg;
-
-  const strip = (s: string) =>
-    vctx.forbidden.dontSay.reduce(
-      (acc, t) => (t ? acc.replace(new RegExp(escapeRegex(t), "gi"), "").replace(/\s{2,}/g, " ") : acc),
-      s,
-    );
-  msg = { ...msg, body: strip(msg.body), subject: msg.subject ? strip(msg.subject) : msg.subject };
-  if (deterministicChecks(msg, vctx).length === 0) return msg;
-
+  const repaired = repairMessage(fallbackMessage(args), vctx);
+  if (repaired.body.trim()) return repaired;
+  // Cas dégénéré (le template d'étape entier était un interdit) : salutation minimale.
   const fr = fallbackLang(args.voiceProfile.language) === "fr";
-  const name =
-    args.pack.fields.find((f) => f.path === "identity.name")?.value ?? (fr ? "notre équipe" : "our team");
-  return {
-    channelHint: vctx.channelHint,
-    ...(vctx.channelHint === "email"
-      ? { subject: fr ? "Prise de contact" : "Quick note" }
-      : {}),
-    body: fr
-      ? `Un mot rapide de la part de ${name}. Pouvons-nous en échanger ?`
-      : `A quick note from ${name}. Could we connect about it?`,
-  };
-}
-
-// Dépassement de longueur : on NE tombe PAS en template générique. On tente une
-// passe de COMPRESSION dédiée (garde le fond), puis une troncature propre à la
-// phrase en dernier recours. Le message d'origine a déjà passé tous les autres
-// checks (longueur seule) → la troncature ne peut pas réintroduire d'interdit.
-async function enforceLength(
-  message: NextMessage,
-  vctx: DeterministicCtx,
-): Promise<{ message: NextMessage; calls: number }> {
-  if (message.body.length <= vctx.bodyLimit) return { message, calls: 0 };
-
-  const c = await runCompress({
-    subject: message.subject,
-    body: message.body,
-    limit: vctx.bodyLimit,
-    voiceProfile: vctx.voiceProfile,
-  });
-  if (c.message) {
-    const candidate: NextMessage = {
-      channelHint: vctx.channelHint,
-      subject: c.message.subject ?? message.subject,
-      body: c.message.body,
-    };
-    if (deterministicChecks(candidate, vctx).length === 0) {
-      return { message: candidate, calls: c.calls };
-    }
-  }
-  // Dernier recours déterministe : troncature propre du message d'origine (conforme sauf longueur).
-  return {
-    message: { ...message, body: truncateToSentence(message.body, vctx.bodyLimit) },
-    calls: c.calls,
-  };
+  return { channelHint: vctx.channelHint, body: fr ? "Bonjour." : "Hello." };
 }
 
 // L'interface PUBLIQUE du moteur. NE THROW JAMAIS : en cas d'erreur, renvoie un
@@ -257,56 +196,48 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     const writeRes = await runWrite(writeArgs);
     calls += writeRes.calls;
 
+    const adherenceCtx = {
+      decision: reason.decision,
+      mustDo: reason.mustDo,
+      mustNotDo,
+      avoidedRepetition: reason.avoidedRepetition,
+    };
+
     if (!writeRes.ok || !writeRes.message) {
-      errors.push(`write: ${writeRes.error ?? "échec"} → fallback déterministe`);
+      // CATASTROPHIQUE (aucun draft) → repli d'étape réparé (pas de stub générique).
+      errors.push(`write: ${writeRes.error ?? "échec"} → repli d'étape`);
       message = safeFallback(writeArgs, vctx);
     } else {
       message = writeRes.message;
-      // ── 4) VERIFY — DÉTERMINISTE par défaut. L'appel LLM (3e appel) n'est payé
-      //    QUE si c'est ambigu (recoupement lexical avec un sujet banni / une info
-      //    connue). Tour de réaction normal → 2 appels (reason + write). ──
-      const isLengthViolation = (v: string) => v.startsWith("Body trop long");
-      // L'adhérence (le message a-t-il EXÉCUTÉ la décision ?) se vérifie sur un tour
-      // de réaction (historique présent) ; le 1er message à froid n'a rien à adhérer.
-      const adherenceCtx = {
-        decision: reason.decision,
-        mustDo: reason.mustDo,
-        mustNotDo,
-        avoidedRepetition: reason.avoidedRepetition,
-      };
-      while (true) {
-        let violations = deterministicChecks(message, vctx);
-        if (violations.length === 0 && (hasHistory || needsLlmVerify(message, forbidden))) {
-          const lv = await llmVerify(message, forbidden, hasHistory ? adherenceCtx : undefined);
-          calls += lv.calls;
-          if (!lv.ok) errors.push("verify(llm): indisponible (laissé passer)");
-          if (!lv.pass) violations = lv.violations;
-        }
-        if (violations.length === 0) break; // message vérifié → on l'expédie
 
-        // LONGUEUR SEULE → compression dédiée puis troncature propre (PAS de générique).
-        if (violations.every(isLengthViolation)) {
-          const enf = await enforceLength(message, vctx);
-          calls += enf.calls;
-          message = enf.message; // garanti ≤ limite, conforme aux autres checks
-          break;
-        }
+      // ── 4) VERIFY ──
+      // 4a) Checks déterministes → RÉPARATION CHIRURGICALE (jamais de re-roll→stub).
+      //     L'excision est déterministe : le hook + la question survivent, ça converge.
+      if (deterministicChecks(message, vctx).length > 0) {
+        message = repairMessage(message, vctx);
+        if (!message.body.trim()) message = safeFallback(writeArgs, vctx);
+      }
 
-        // Autres violations (placeholders, dontSay, sujet banni, redite) → 1 révision.
-        if (revisions >= CAPS.maxRevisions) {
-          errors.push(`verify: échec après révision (${violations.join(" | ")}) → fallback`);
-          message = safeFallback(writeArgs, vctx);
-          break;
+      // 4b) Adhérence sémantique (tours de réaction) → 1 ré-écriture max, sinon on
+      //     GARDE le draft réparé (toujours on-topic) — jamais de stub.
+      if (message.body.trim() && (hasHistory || needsLlmVerify(message, forbidden))) {
+        const lv = await llmVerify(message, forbidden, hasHistory ? adherenceCtx : undefined);
+        calls += lv.calls;
+        if (!lv.ok) errors.push("verify(llm): indisponible (laissé passer)");
+        if (!lv.pass && revisions < CAPS.maxRevisions) {
+          revisions++;
+          const rw = await runWrite({ ...writeArgs, critique: lv.violations.join("\n") });
+          calls += rw.calls;
+          if (rw.ok && rw.message) {
+            message =
+              deterministicChecks(rw.message, vctx).length > 0
+                ? repairMessage(rw.message, vctx)
+                : rw.message;
+            if (!message.body.trim()) message = safeFallback(writeArgs, vctx);
+          } else {
+            errors.push(`révision write: ${rw.error ?? "échec"} (draft réparé conservé)`);
+          }
         }
-        revisions++;
-        const rw = await runWrite({ ...writeArgs, critique: violations.join("\n") });
-        calls += rw.calls;
-        if (!rw.ok || !rw.message) {
-          errors.push(`révision write: ${rw.error ?? "échec"} → fallback`);
-          message = safeFallback(writeArgs, vctx);
-          break;
-        }
-        message = rw.message;
       }
     }
 
@@ -418,13 +349,22 @@ function catastrophicFallback(input: AgentInput, errors: string[], calls: number
     input.incomingCandidateReply ??
     [...(input.conversation ?? [])].reverse().find((m) => m.role === "candidate")?.content ??
     "";
-  const fr = (cheapDetectLang(lastCandidate) || ctx?.voice?.language || "en").match(/^fr|fran/i);
+  const fr = !!(cheapDetectLang(lastCandidate) || ctx?.voice?.language || "en").match(/^fr|fran/i);
+  // Stage + context aware : pas de ré-introduction si la conversation est déjà entamée.
+  const hasHistory =
+    (input.priorState?.counters?.messagesSent ?? 0) >= 1 ||
+    (input.conversation ?? []).some((m) => m.role === "agent");
+  const body = hasHistory
+    ? fr
+      ? `Désolé, un souci technique de mon côté. Reprenons : je reviens vers vous très vite pour continuer.`
+      : `Sorry, a technical hiccup on my side. Let's pick back up — I'll follow up shortly to continue.`
+    : fr
+      ? `Bonjour, je vous contacte de la part de ${name}. Seriez-vous ouvert à en échanger ?`
+      : `Hi, I'm reaching out from ${name}. Would you be open to hearing more?`;
   const message: NextMessage = {
     channelHint: "email",
     subject: fr ? `Un mot de ${name}` : `A note from ${name}`,
-    body: fr
-      ? `Bonjour, je vous contacte de la part de ${name}. Seriez-vous ouvert à un court échange ?`
-      : `Hi, I'm reaching out from ${name}. Would you be open to a short chat?`,
+    body,
   };
   const state: AgentState = input.priorState ?? {
     personaKey: ctx ? hashContext(ctx) : "persona_unknown",
