@@ -39,12 +39,50 @@ export function hasSchedulingLanguage(text: string): boolean {
   return SCHEDULING_RE.test(text);
 }
 
+// Normalise une langue (code ou nom) en "fr"/"en"/null (null = non vérifiable ici).
+export function normalizeLang(l: string | undefined): "fr" | "en" | null {
+  const s = (l ?? "").toLowerCase();
+  if (/\b(fr|fra|fre|fran[cç]ais|french)\b/.test(s) || /^fr/.test(s)) return "fr";
+  if (/\b(en|eng|anglais|english)\b/.test(s) || /^en/.test(s)) return "en";
+  return null;
+}
+
+// Marqueurs forts par langue (mots-fonction + accents) pour détecter une FUITE
+// de langue dans le message produit — y compris une salutation isolée.
+const FR_MARKERS =
+  /[éèêàâîïôûùçœ]|\b(bonjour|bonsoir|salut|coucou|merci|cordialement|vous|votre|vos|nous|notre|nos|je|tu|avec|pour|dans|chez|[ée]quipe|poste|entreprise|ravi|ouvert|[ée]change|n'h[ée]sitez)\b/gi;
+const EN_MARKERS =
+  /\b(hello|hi|hey|dear|thanks|thank you|regards|your|you|we|we're|our|the|with|for|role|team|company|reach|reaching|looking|open to|would you|happy to|about)\b/gi;
+const FR_GREETING = /^\s*(bonjour|bonsoir|salut|coucou)\b/i;
+const EN_GREETING = /^\s*(hi|hello|hey|dear|good\s+(morning|afternoon|evening))\b/i;
+
+// GATE DE LANGUE déterministe : le message doit être ENTIÈREMENT dans outputLang.
+// Détecte une langue ≠ cible (corps) ET une salutation d'une autre langue (cohérence
+// intra-message : « Bonjour » en tête d'un message anglais = échec).
+export function outputLanguageViolations(haystack: string, target: "fr" | "en" | null): string[] {
+  if (!target) return [];
+  const v: string[] = [];
+  const frHits = (haystack.match(FR_MARKERS) ?? []).length;
+  const enHits = (haystack.match(EN_MARKERS) ?? []).length;
+  const firstLine = haystack.trim().split(/\n/)[0] ?? "";
+
+  if (target === "en") {
+    if (FR_GREETING.test(firstLine)) v.push("LANGUE : salutation française dans un message anglais.");
+    if (frHits >= 2) v.push(`LANGUE : français détecté (${frHits} marqueurs) — le message doit être en anglais.`);
+  } else {
+    if (EN_GREETING.test(firstLine)) v.push("LANGUE : salutation anglaise dans un message français.");
+    if (enHits >= 3) v.push(`LANGUE : anglais détecté (${enHits} marqueurs) — le message doit être en français.`);
+  }
+  return v;
+}
+
 export interface DeterministicCtx {
   forbidden: ForbiddenList;
   voiceProfile: VoiceProfile;
   channelHint: ChannelHint;
   bodyLimit: number; // limite DURE de caractères (canal + hook/answer)
   schedulingAllowed: boolean; // proposition d'appel/créneau autorisée ce tour ?
+  outputLang: "fr" | "en" | null; // langue de sortie imposée (null = non vérifiable)
 }
 
 // VERIFY est déterministe par DÉFAUT. On ne paie l'appel LLM que si c'est AMBIGU :
@@ -96,6 +134,9 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
   if (!ctx.schedulingAllowed && hasSchedulingLanguage(haystack)) {
     violations.push("Proposition d'appel/créneau hors-stage (scheduling non autorisé ce tour).");
   }
+
+  // 3d) Gate de langue : message entièrement dans outputLang (corps + salutation).
+  violations.push(...outputLanguageViolations(haystack, ctx.outputLang));
 
   // 4) Mémoire : reproposition d'un sujet banni (rejet/écarté actif).
   for (const topic of ctx.forbidden.bannedTopics) {
@@ -183,6 +224,10 @@ export async function llmVerify(
     "(B) ADHÉRENCE : le message exécute-t-il CHAQUE point de À FAIRE ? Évite-t-il TOUT À NE PAS FAIRE",
     "et toute répétition listée ? Une divergence (point À FAIRE manquant, ou À NE PAS FAIRE présent,",
     "ex: re-décrit le rôle, re-présente des excuses, pousse un appel) = violation.",
+    "(C) COHÉRENCE / CLARTÉ (plancher que la concision ne viole jamais) : chaque phrase doit être",
+    "auto-suffisante. Signale tout pronom ou sujet IMPLICITE sans référent énoncé (ex: « It's built",
+    "in. » sans dire de QUOI on parle ; « Not a stretch, not occasional. » sans sujet), toute phrase",
+    "sur-compressée incompréhensible hors contexte, toute référence à un non-dit. = violation.",
     "Si tout est respecté : pass=true. Sinon pass=false + violations précises. Réponds via le tool.",
   ].join(" ");
 
@@ -305,6 +350,18 @@ export function repairMessage(msg: NextMessage, ctx: DeterministicCtx): NextMess
         const hi = fallbackLang(ctx.voiceProfile.language) === "fr" ? "Bonjour" : "Hello";
         return name ? `${hi} ${name}, ` : `${hi}, `;
       },
+    );
+  }
+  // 6c) Langue : salutation dans la mauvaise langue → réécrite dans outputLang
+  //     (dernier recours pour le cas « Bonjour » en tête d'un message anglais ;
+  //     un corps entier mal-langue est traité par régénération en amont).
+  if (ctx.outputLang === "en" && FR_GREETING.test(body)) {
+    body = body.replace(/^\s*(?:bonjour|bonsoir|salut|coucou)\b[\s,!?-]*([\p{L}][\p{L}'-]*)?[\s,!?.-]*/iu, (_m, name?: string) =>
+      name ? `Hello ${name}, ` : "Hello, ",
+    );
+  } else if (ctx.outputLang === "fr" && EN_GREETING.test(body)) {
+    body = body.replace(/^\s*(?:hi|hello|hey|dear)\b[\s,!?-]*([\p{L}][\p{L}'-]*)?[\s,!?.-]*/iu, (_m, name?: string) =>
+      name ? `Bonjour ${name}, ` : "Bonjour, ",
     );
   }
   // 7) Emoji interdit → retirés.

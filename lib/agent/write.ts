@@ -86,6 +86,10 @@ const SYSTEM = [
   "LANGUE = tout le message dans la langue active (salutation + corps + signature).",
   "JAMAIS de mélange : pas de « Bonjour » + corps en anglais + « Alex » en signature.",
   "",
+  "CLARTÉ = plancher que la concision ne viole JAMAIS. Chaque phrase est auto-suffisante :",
+  "aucun pronom ni sujet implicite sans référent (« It's built in. » sans dire de quoi ;",
+  "« Not a stretch, not occasional. » sans sujet). Si tu raccourcis, garde le référent.",
+  "",
   "Réponds UNIQUEMENT via le tool fourni.",
 ].join("\n");
 

@@ -29,6 +29,7 @@ import {
   containsTerm,
   hasSchedulingLanguage,
   repairMessage,
+  normalizeLang,
   type DeterministicCtx,
 } from "./verify";
 import { defaultPlan } from "./state";
@@ -191,6 +192,10 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       bodyLimit,
     };
 
+    // Langue de sortie STRICTE : code normalisé de l'active language (fr/en ;
+    // null = non vérifiable, ex. autre langue → on ne gate pas).
+    const outputLang = normalizeLang(activeLanguage);
+
     // Contexte de vérification, partagé par VERIFY et par le fallback (qui est
     // lui aussi vérifié+assaini : jamais de message non vérifié qui sort).
     const vctx: DeterministicCtx = {
@@ -199,6 +204,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       channelHint: reason.channelHint,
       bodyLimit,
       schedulingAllowed,
+      outputLang,
     };
 
     let message: NextMessage;
@@ -221,8 +227,23 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       message = writeRes.message;
 
       // ── 4) VERIFY ──
+      // 4a-langue) Gate de langue : une FUITE ne s'excise pas (il faut traduire) →
+      //   régénération one-shot avec critique explicite (hors budget de révision).
+      const langViolations = deterministicChecks(message, vctx).filter((v) => v.startsWith("LANGUE"));
+      if (langViolations.length > 0 && outputLang) {
+        const langName = outputLang === "fr" ? "français" : "anglais";
+        const rw = await runWrite({
+          ...writeArgs,
+          critique: `Le message DOIT être ENTIÈREMENT en ${langName} (salutation, corps ET signature) — aucune autre langue, aucun mot d'une autre langue en tête. ${langViolations.join(" ")}`,
+        });
+        calls += rw.calls;
+        if (rw.ok && rw.message) message = rw.message;
+        else errors.push(`langue: régénération échouée (${langViolations.join(" | ")})`);
+      }
+
       // 4a) Checks déterministes → RÉPARATION CHIRURGICALE (jamais de re-roll→stub).
       //     L'excision est déterministe : le hook + la question survivent, ça converge.
+      //     (Pour la langue, la réparation normalise au moins une salutation mal-langue.)
       if (deterministicChecks(message, vctx).length > 0) {
         message = repairMessage(message, vctx);
         if (!message.body.trim()) message = safeFallback(writeArgs, vctx);
