@@ -174,13 +174,16 @@ export default function TestPage() {
   }, [runAgent]);
 
   // Met en file un message candidat SANS déclencher l'agent (multi-messages entrée).
+  // Mises à jour FONCTIONNELLES → des Entrées rapides ne perdent aucun message.
   const queueReply = () => {
     const reply = draft.trim();
     if (!reply || !ctx || loading) return;
     const candidateMsg: Message = { role: "candidate", content: reply, ts: Date.now() };
-    const withCandidate = [...messages, candidateMsg];
-    setMessages(withCandidate);
-    saveConversation(withCandidate);
+    setMessages((prev) => {
+      const next = [...prev, candidateMsg];
+      saveConversation(next);
+      return next;
+    });
     setPending((p) => [...p, reply]);
     setDraft("");
   };
@@ -330,24 +333,31 @@ export default function TestPage() {
             </label>
             {pending.length > 0 && (
               <p className="mb-2 text-xs text-muted">
-                {pending.length} message{pending.length > 1 ? "s" : ""} queued — the agent will
-                process them together.
+                {pending.length} message{pending.length > 1 ? "s" : ""} en file — clique « Agent
+                replies → » quand tu as fini d'écrire.
               </p>
             )}
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
+                // Enter = envoyer un message candidat (bulle) ; Shift+Enter = saut de ligne ;
+                // ⌘/Ctrl+Enter = envoyer puis déclencher l'agent.
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
                   requestAgentReply();
+                } else if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  queueReply();
                 }
               }}
-              placeholder="e.g. Sounds interesting but I'm pretty swamped this quarter…"
-              className="min-h-[80px] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none transition-colors focus:border-ink"
+              placeholder="Écris un message candidat, Entrée pour l'envoyer. Plusieurs d'affilée = plusieurs bulles."
+              className="min-h-[72px] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none transition-colors focus:border-ink"
             />
             <div className="mt-2 flex items-center justify-between gap-2">
-              <span className="text-xs text-muted">＋ queue more, then let the agent reply</span>
+              <span className="text-xs text-muted">
+                Entrée = envoyer un message · Maj+Entrée = saut de ligne
+              </span>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -355,7 +365,7 @@ export default function TestPage() {
                   disabled={loading || !draft.trim()}
                   className="rounded-lg border border-line bg-surface px-3 py-2 text-sm font-medium text-ink transition-colors hover:border-ink disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  + Add another
+                  Send message
                 </button>
                 <button
                   type="button"
@@ -363,8 +373,7 @@ export default function TestPage() {
                   disabled={loading || (!draft.trim() && pending.length === 0)}
                   className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-on-dark transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Send{pending.length > 0 ? ` (${pending.length + (draft.trim() ? 1 : 0)})` : ""} →
-                  agent
+                  Agent replies{pending.length + (draft.trim() ? 1 : 0) > 0 ? ` (${pending.length + (draft.trim() ? 1 : 0)})` : ""} →
                 </button>
               </div>
             </div>
