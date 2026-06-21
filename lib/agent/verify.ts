@@ -31,12 +31,21 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Détecte un langage de SCHEDULING (appel, créneau, horaire, jour, lien d'agenda) — fr+en.
-// Stems en préfixe (pas de \b final) pour attraper "available/scheduling/disponibilités/créneaux".
-const SCHEDULING_RE =
-  /\b(?:appel|rdv|rendez-?vous|cr[ée]neau|planifi|disponib|dispo|agenda|calend|call|meeting|schedul|slot|availab|calendly|cal\.com|zoom|lundi|mardi|mercredi|jeudi|vendredi|monday|tuesday|wednesday|thursday|friday)|\b\d{1,2}\s?(?:h|am|pm)\b|\b\d{1,2}:\d{2}\b/i;
+// SCHEDULING — deux niveaux.
+// CONCRET = logistique d'un rendez-vous (horaires, jours, créneaux, calendrier,
+//   « let's book », « find a time »). Interdit hors propose_call/confirm_logistics.
+const CONCRETE_SCHEDULING_RE =
+  /\b(?:cr[ée]neau|planifi|disponib|agenda|calend|calendly|cal\.com|zoom|book a|let'?s book|find a time|set up a (?:time|meeting|call)|pick a time|lundi|mardi|mercredi|jeudi|vendredi|monday|tuesday|wednesday|thursday|friday|tomorrow|demain|next week|la semaine prochaine)\b|\b\d{1,2}\s?(?:h|am|pm)\b|\b\d{1,2}:\d{2}\b|\bslot\b/i;
+// SONDE D'INTÉRÊT = simple pont (« are you open to a short call? ») — autorisée partout.
+const CALL_PROBE_RE =
+  /\b(open to (?:a )?(?:short |quick |brief )?(?:call|chat)|up for (?:a )?(?:call|chat)|worth a (?:quick )?(?:call|chat)|ouvert[e]? à (?:un|une) (?:court[e]? )?(?:[ée]change|appel|discussion))\b/i;
+
+export function hasConcreteScheduling(text: string): boolean {
+  return CONCRETE_SCHEDULING_RE.test(text);
+}
+// Conservé (large) pour la journalisation des moves, PAS pour le gate.
 export function hasSchedulingLanguage(text: string): boolean {
-  return SCHEDULING_RE.test(text);
+  return CONCRETE_SCHEDULING_RE.test(text) || CALL_PROBE_RE.test(text) || /\b(call|appel|meeting|rendez-?vous|rdv)\b/i.test(text);
 }
 
 // Normalise une langue (code ou nom) en "fr"/"en"/null (null = non vérifiable ici).
@@ -107,13 +116,25 @@ export function stripMarkdown(text: string): string {
     .trim();
 }
 
+// Salutation en tête + nom optionnel. Capte « Bonjour Alex, » / « Hi Sam » / « Hello, ».
+const GREETING_OPENER =
+  /^\s*(bonjour|bonsoir|salut|coucou|hello|hi|hey|dear)\b[\s,]*([\p{L}][\p{L}'-]*)?[\s,!.?-]*/iu;
+// Mots qui suivent une salutation sans être un nom propre (à ne pas traiter en garbage).
+const GENERIC_AFTER_GREETING = new Set(["there", "all", "team", "everyone", "folks", "again"]);
+// Annonce explicite de non-présomption (à proscrire — la non-présomption est dans le TON).
+const ANNOUNCED_NONPRESUMPTION =
+  /\b(not assuming|without assuming|i won'?t assume|i'?m not assuming|no assumptions?|sans (?:rien )?pr[ée]sumer|je ne pr[ée]sume (?:rien|pas)|sans pr[ée]supposer)\b/i;
+
 export interface DeterministicCtx {
   forbidden: ForbiddenList;
   voiceProfile: VoiceProfile;
   channelHint: ChannelHint;
   bodyLimit: number; // limite DURE de caractères (canal + hook/answer)
-  schedulingAllowed: boolean; // proposition d'appel/créneau autorisée ce tour ?
+  schedulingAllowed: boolean; // logistique concrète d'appel autorisée ce tour ?
   outputLang: "fr" | "en" | null; // langue de sortie imposée (null = non vérifiable)
+  allowGreeting: boolean; // salutation autorisée (= tout 1er message agent de la conv)
+  candidateName?: string; // prénom réel du candidat (sinon : aucun nom)
+  isIntro: boolean; // étape intro (contact froid)
 }
 
 // VERIFY est déterministe par DÉFAUT. On ne paie l'appel LLM que si c'est AMBIGU :
@@ -161,9 +182,30 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
   const bracket = haystack.match(/\[[^\]\n]{1,40}\]/);
   if (bracket) violations.push(`Placeholder entre crochets interdit : « ${bracket[0]} ».`);
 
-  // 3c) Stage-gate du scheduling : pas de proposition d'appel/créneau hors-stage.
-  if (!ctx.schedulingAllowed && hasSchedulingLanguage(haystack)) {
-    violations.push("Proposition d'appel/créneau hors-stage (scheduling non autorisé ce tour).");
+  // 3c) Stage-gate du scheduling : logistique CONCRÈTE interdite hors call-stage.
+  //     La SONDE d'intérêt (« open to a short call? ») reste autorisée (pont).
+  if (!ctx.schedulingAllowed && hasConcreteScheduling(haystack)) {
+    violations.push("Logistique d'appel concrète hors-stage (horaire/jour/créneau non autorisé ce tour).");
+  }
+
+  // 3f) Salutation : seulement au tout 1er message agent ; jamais de nom inexistant.
+  const g = msg.body.match(GREETING_OPENER);
+  if (g) {
+    const name = g[2];
+    if (!ctx.allowGreeting) {
+      violations.push("Salutation alors que ce n'est pas le 1er message (pas de re-greeting).");
+    } else if (name && !GENERIC_AFTER_GREETING.has(name.toLowerCase())) {
+      if (!ctx.candidateName) {
+        violations.push(`Nom dans la salutation alors que le candidat est inconnu : « ${name} ».`);
+      } else if (name.toLowerCase() !== ctx.candidateName.toLowerCase()) {
+        violations.push(`Nom de salutation incorrect : « ${name} » (attendu « ${ctx.candidateName} »).`);
+      }
+    }
+  }
+
+  // 3g) Non-présomption ANNONCÉE (doit être dans le ton, pas déclarée).
+  if (ctx.isIntro && ANNOUNCED_NONPRESUMPTION.test(haystack)) {
+    violations.push("Non-présomption annoncée explicitement (doit rester dans le ton).");
   }
 
   // 3d) Gate de langue : message entièrement dans outputLang (corps + salutation).
@@ -348,8 +390,17 @@ export function repairMessage(msg: NextMessage, ctx: DeterministicCtx): NextMess
       .join(" ");
   };
 
-  // 1) Scheduling hors-stage → phrases retirées (le hook / la question restent).
-  if (!ctx.schedulingAllowed) dropSentence((s) => hasSchedulingLanguage(s));
+  // 1) Logistique d'appel CONCRÈTE hors-stage → phrases retirées. La SONDE d'intérêt
+  //    (« open to a short call? ») est conservée (sauf si elle porte aussi du concret).
+  if (!ctx.schedulingAllowed) {
+    dropSentence((s) => hasConcreteScheduling(s) && !CALL_PROBE_RE.test(s));
+    // Si une phrase mêle sonde + concret, on retire juste le concret en gardant la sonde.
+    body = splitSentences(body)
+      .map((s) => (hasConcreteScheduling(s) ? s.replace(CONCRETE_SCHEDULING_RE, "").replace(/\s{2,}/g, " ") : s))
+      .join(" ");
+  }
+  // 1b) Non-présomption annoncée (intro) → phrase retirée.
+  if (ctx.isIntro) dropSentence((s) => ANNOUNCED_NONPRESUMPTION.test(s));
   // 2) Sujets bannis reproposés → phrases retirées.
   for (const topic of ctx.forbidden.bannedTopics) {
     dropSentence((s) => containsTerm(s.toLowerCase(), topic));
@@ -401,6 +452,27 @@ export function repairMessage(msg: NextMessage, ctx: DeterministicCtx): NextMess
     body = body.replace(/^\s*(?:hi|hello|hey|dear)\b[\s,!?-]*([\p{L}][\p{L}'-]*)?[\s,!?.-]*/iu, (_m, name?: string) =>
       name ? `Bonjour ${name}, ` : "Bonjour, ",
     );
+  }
+  // 6d) Politique de salutation : pas de greeting après le 1er message ; pas de nom
+  //     inexistant/incorrect (candidat inconnu → aucun nom).
+  const gm = body.match(GREETING_OPENER);
+  if (gm) {
+    if (!ctx.allowGreeting) {
+      // Re-greeting → on retire la salutation, on garde le reste du message.
+      body = body.slice(gm[0].length).trimStart();
+      body = body.charAt(0).toUpperCase() + body.slice(1);
+    } else {
+      const name = gm[2];
+      const generic = name && GENERIC_AFTER_GREETING.has(name.toLowerCase());
+      if (name && !generic) {
+        const hi = gm[1];
+        if (!ctx.candidateName) {
+          body = `${hi}, ` + body.slice(gm[0].length).trimStart();
+        } else if (name.toLowerCase() !== ctx.candidateName.toLowerCase()) {
+          body = `${hi} ${ctx.candidateName}, ` + body.slice(gm[0].length).trimStart();
+        }
+      }
+    }
   }
   // 7) Emoji interdit → retirés.
   if (ctx.voiceProfile.emojiUse === "none") body = stripEmojiChars(body);

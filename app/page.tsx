@@ -33,7 +33,7 @@ const HERO_OUTPUT: AgentOutput = {
       "voice.dontSay",
     ],
   },
-  nextMessage: { channelHint: "email", body: "" },
+  nextMessages: [{ channelHint: "email", body: "" }],
 };
 
 function Wordmark({ onDark = false }: { onDark?: boolean }) {

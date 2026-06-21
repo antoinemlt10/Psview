@@ -89,11 +89,12 @@ export interface AgentOutput {
     avoidedRepetition?: string[];
     memoryUpdates?: string[];
   };
-  nextMessage: {
+  // 1 à 3 messages (burst) — rendus en bulles séparées dans la test area.
+  nextMessages: {
     channelHint: Channel;
     subject?: string;
     body: string;
-  };
+  }[];
   state?: Record<string, unknown>;
   // Diagnostics du moteur (appels LLM réellement déclenchés, ok/fallback).
   meta?: { ok: boolean; llmCallsFired: number; errors: string[]; model: string };

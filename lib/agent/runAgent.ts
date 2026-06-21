@@ -126,7 +126,10 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       .filter((m) => m.role === "candidate")
       .map((m) => m.content);
     const incoming = input.incomingCandidateReply?.trim();
-    if (incoming && candidateTexts[candidateTexts.length - 1] !== incoming) {
+    // On ajoute l'incoming aux candidateTexts uniquement s'il s'agit d'un message
+    // SIMPLE pas déjà présent. Un LOT joint (séparé par lignes vides) est déjà dans
+    // la conversation → on ne le recompte pas (langue/engagement).
+    if (incoming && !incoming.includes("\n\n") && candidateTexts[candidateTexts.length - 1] !== incoming) {
       candidateTexts.push(incoming);
     }
     const activeLanguage = resolveActiveLanguage({
@@ -183,6 +186,14 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     // mustNotDo passé au writer = directives de REASON + répétitions promises évitées.
     const mustNotDo = [...reason.mustNotDo, ...reason.avoidedRepetition];
 
+    // Langue de sortie STRICTE : code normalisé de l'active language (fr/en ;
+    // null = non vérifiable, ex. autre langue → on ne gate pas).
+    const outputLang = normalizeLang(activeLanguage);
+    const isIntro = reason.stage === "intro";
+    const candidateName = input.candidate?.name;
+    // Salutation : autorisée uniquement au TOUT 1er message agent de la conversation
+    // (et, dans un burst, seulement le 1er message). hasHistory → aucune salutation.
+
     const writeArgs: WriteArgs = {
       nextObjective: reason.nextObjective,
       decision: reason.decision,
@@ -195,29 +206,24 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       voiceProfile,
       forbidden,
       persona: personality.persona,
-      candidateName: input.candidate?.name,
+      candidateName,
       bodyLimit,
+      allowGreeting: !hasHistory,
     };
 
-    // Langue de sortie STRICTE : code normalisé de l'active language (fr/en ;
-    // null = non vérifiable, ex. autre langue → on ne gate pas).
-    const outputLang = normalizeLang(activeLanguage);
-
-    // Contexte de vérification, partagé par VERIFY et par le fallback (qui est
-    // lui aussi vérifié+assaini : jamais de message non vérifié qui sort).
-    const vctx: DeterministicCtx = {
+    // Contexte de vérification par message (allowGreeting dépend de l'index).
+    const vctxFor = (idx: number): DeterministicCtx => ({
       forbidden,
       voiceProfile,
       channelHint: reason.channelHint,
       bodyLimit,
       schedulingAllowed,
       outputLang,
-    };
-
-    let message: NextMessage;
-    let revisions = 0;
-    const writeRes = await runWrite(writeArgs);
-    calls += writeRes.calls;
+      allowGreeting: !hasHistory && idx === 0,
+      candidateName,
+      isIntro,
+    });
+    const vctx0 = vctxFor(0);
 
     const adherenceCtx = {
       decision: reason.decision,
@@ -226,68 +232,84 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       avoidedRepetition: reason.avoidedRepetition,
     };
 
-    if (!writeRes.ok || !writeRes.message) {
+    // Vérifie + répare chaque message du lot ; jette les vides ; cap dur 1-3 ; ≥1.
+    const verifyBatch = (msgs: NextMessage[]): NextMessage[] => {
+      const out = msgs
+        .map((m, i) => (deterministicChecks(m, vctxFor(i)).length > 0 ? repairMessage(m, vctxFor(i)) : m))
+        .filter((m) => m.body.trim().length > 0)
+        .slice(0, 3);
+      return out.length ? out : [safeFallback(writeArgs, vctx0)];
+    };
+
+    let revisions = 0;
+    let messages: NextMessage[];
+    const writeRes = await runWrite(writeArgs);
+    calls += writeRes.calls;
+
+    if (!writeRes.ok || !writeRes.messages) {
       // CATASTROPHIQUE (aucun draft) → repli d'étape réparé (pas de stub générique).
       errors.push(`write: ${writeRes.error ?? "échec"} → repli d'étape`);
-      message = safeFallback(writeArgs, vctx);
+      messages = [safeFallback(writeArgs, vctx0)];
     } else {
-      message = writeRes.message;
+      messages = writeRes.messages;
 
       // ── 4) VERIFY ──
-      // 4a-langue) Gate de langue : une FUITE ne s'excise pas (il faut traduire) →
-      //   régénération one-shot avec critique explicite (hors budget de révision).
-      const langViolations = deterministicChecks(message, vctx).filter((v) => v.startsWith("LANGUE"));
-      if (langViolations.length > 0 && outputLang) {
+      // 4a-langue) Une FUITE de langue ne s'excise pas (il faut traduire) →
+      //   régénération one-shot du lot (hors budget de révision).
+      const anyLang = messages.some((m, i) =>
+        deterministicChecks(m, vctxFor(i)).some((v) => v.startsWith("LANGUE")),
+      );
+      if (anyLang && outputLang) {
         const langName = outputLang === "fr" ? "français" : "anglais";
         const rw = await runWrite({
           ...writeArgs,
-          critique: `Le message DOIT être ENTIÈREMENT en ${langName} (salutation, corps ET signature) — aucune autre langue, aucun mot d'une autre langue en tête. ${langViolations.join(" ")}`,
+          critique: `Chaque message DOIT être ENTIÈREMENT en ${langName} (salutation, corps ET signature) — aucune autre langue, aucun mot d'une autre langue en tête.`,
         });
         calls += rw.calls;
-        if (rw.ok && rw.message) message = rw.message;
-        else errors.push(`langue: régénération échouée (${langViolations.join(" | ")})`);
+        if (rw.ok && rw.messages) messages = rw.messages;
+        else errors.push("langue: régénération échouée");
       }
 
-      // 4a) Checks déterministes → RÉPARATION CHIRURGICALE (jamais de re-roll→stub).
-      //     L'excision est déterministe : le hook + la question survivent, ça converge.
-      //     (Pour la langue, la réparation normalise au moins une salutation mal-langue.)
-      if (deterministicChecks(message, vctx).length > 0) {
-        message = repairMessage(message, vctx);
-        if (!message.body.trim()) message = safeFallback(writeArgs, vctx);
-      }
+      // 4a) Réparation chirurgicale déterministe par message (jamais de re-roll→stub).
+      messages = verifyBatch(messages);
 
-      // 4b) Adhérence sémantique (tours de réaction) → 1 ré-écriture max, sinon on
-      //     GARDE le draft réparé (toujours on-topic) — jamais de stub.
-      if (message.body.trim() && (hasHistory || needsLlmVerify(message, forbidden))) {
-        const lv = await llmVerify(message, forbidden, hasHistory ? adherenceCtx : undefined);
+      // 4b) Adhérence sémantique sur le LOT (tours de réaction) → 1 ré-écriture max.
+      const combined = messages.map((m) => m.body).join("\n\n");
+      if (hasHistory || needsLlmVerify({ channelHint: reason.channelHint, body: combined }, forbidden)) {
+        const lv = await llmVerify(
+          { channelHint: reason.channelHint, body: combined },
+          forbidden,
+          hasHistory ? adherenceCtx : undefined,
+        );
         calls += lv.calls;
         if (!lv.ok) errors.push("verify(llm): indisponible (laissé passer)");
         if (!lv.pass && revisions < CAPS.maxRevisions) {
           revisions++;
           const rw = await runWrite({ ...writeArgs, critique: lv.violations.join("\n") });
           calls += rw.calls;
-          if (rw.ok && rw.message) {
-            message =
-              deterministicChecks(rw.message, vctx).length > 0
-                ? repairMessage(rw.message, vctx)
-                : rw.message;
-            if (!message.body.trim()) message = safeFallback(writeArgs, vctx);
-          } else {
-            errors.push(`révision write: ${rw.error ?? "échec"} (draft réparé conservé)`);
-          }
+          if (rw.ok && rw.messages) messages = verifyBatch(rw.messages);
+          else errors.push(`révision write: ${rw.error ?? "échec"} (lot réparé conservé)`);
         }
       }
     }
 
+    // Corps combiné pour l'état + la trace (mesurés sur ce qui sort réellement).
+    const combinedBody = messages.map((m) => m.body).join("\n\n");
+    const traceMsg: NextMessage = {
+      channelHint: reason.channelHint,
+      subject: messages[0]?.subject,
+      body: combinedBody,
+    };
+
     // ── 5) STATE UPDATE (déterministe) ──
-    const newQuestions = extractQuestions(message.body);
+    const newQuestions = extractQuestions(combinedBody);
     // Bonus : on journalise les MOVES réellement faits (mustDo exécutés + excuses/échange
     // détectés dans le body) → ils deviennent des interdits durs au tour suivant.
-    const moves = detectMoves(message.body);
+    const moves = detectMoves(combinedBody);
     const isProposal =
       reason.stage === "propose_call" ||
       reason.stage === "confirm_logistics" ||
-      hasSchedulingLanguage(message.body);
+      hasSchedulingLanguage(combinedBody);
     agentMemory = {
       pointsMade: pushUnique(agentMemory.pointsMade, [...reason.mustDo, ...moves, reason.nextObjective]),
       questionsAsked: pushUnique(agentMemory.questionsAsked, newQuestions),
@@ -315,13 +337,13 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       counters: newCounters,
     };
 
-    // ── Trace MESURÉE sur le message final (jamais juste déclarée par REASON) ──
+    // ── Trace MESURÉE sur le lot final (jamais juste déclarée par REASON) ──
     const reasoning: Reasoning = {
       candidateSignals: reason.signals,
       decision: reason.decision,
       groundingUsed: pack.used,
-      constraintsRespected: measureConstraints(message, vctx, inv.notes),
-      avoidedRepetition: measureAvoided(message, forbidden),
+      constraintsRespected: measureConstraints(traceMsg, vctx0, inv.notes),
+      avoidedRepetition: measureAvoided(traceMsg, forbidden),
       memoryUpdates: applied.summary,
     };
 
@@ -329,7 +351,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       personality: updatedPersonality,
       plan,
       reasoning,
-      nextMessage: message,
+      nextMessages: messages,
       state,
       meta: { ok: errors.length === 0, errors, llmCallsFired: calls, model: META_MODEL },
     };
@@ -422,7 +444,7 @@ function catastrophicFallback(input: AgentInput, errors: string[], calls: number
       avoidedRepetition: [],
       memoryUpdates: [],
     },
-    nextMessage: message,
+    nextMessages: [message],
     state,
     meta: { ok: false, errors, llmCallsFired: calls, model: META_MODEL },
   };

@@ -126,7 +126,7 @@ export interface AgentOutput {
   personality: Personality;
   plan: Plan;
   reasoning: Reasoning;
-  nextMessage: NextMessage;
+  nextMessages: NextMessage[]; // 1 à 3 messages (burst), rendus en bulles séparées
   state: AgentState;
   meta: AgentMeta;
 }

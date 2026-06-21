@@ -57,11 +57,11 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       avoidedRepetition: out.reasoning.avoidedRepetition,
       memoryUpdates: out.reasoning.memoryUpdates,
     },
-    nextMessage: {
-      channelHint: out.nextMessage.channelHint,
-      subject: out.nextMessage.subject,
-      body: out.nextMessage.body,
-    },
+    nextMessages: out.nextMessages.map((m) => ({
+      channelHint: m.channelHint,
+      subject: m.subject,
+      body: m.body,
+    })),
     // Full engine state, opaque to the UI, echoed back next turn as priorState.
     state: out.state as unknown as Record<string, unknown>,
     meta: out.meta,

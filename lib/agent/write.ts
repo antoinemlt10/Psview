@@ -7,10 +7,14 @@ import { MODELS, MAX_TOKENS, TIMEOUTS } from "./config";
 
 const CHANNELS: [ChannelHint, ...ChannelHint[]] = ["email", "linkedin", "sms"];
 
+// Le writer rend 1 à 3 messages (cap dur). La plupart du temps 1 ; un burst
+// seulement quand c'est naturel (ex: courte réaction en msg 1 + question en msg 2).
 export const WriteOutputSchema = z.object({
-  subject: z.string().optional(),
-  body: z.string(),
   channelHint: z.enum(CHANNELS),
+  messages: z
+    .array(z.object({ subject: z.string().optional(), body: z.string() }))
+    .min(1)
+    .max(3),
 });
 export type WriteOutput = z.infer<typeof WriteOutputSchema>;
 
@@ -39,11 +43,12 @@ export interface WriteArgs {
   persona: string;
   candidateName?: string; // prénom réel du candidat, pour la salutation
   bodyLimit: number; // limite DURE de caractères du body
+  allowGreeting: boolean; // salutation autorisée (= tout 1er message agent de la conv)
   critique?: string; // pour la révision
 }
 
 const SYSTEM = [
-  "Tu es le RÉDACTEUR de l'agent de recrutement. Tu N'ÉCRIS QUE le message.",
+  "Tu es le RÉDACTEUR de l'agent de recrutement. Tu N'ÉCRIS QUE le(s) message(s).",
   "Tu EXÉCUTES la DÉCISION qu'on te donne — tu n'improvises PAS et tu n'ajoutes RIEN",
   "qui n'est pas demandé. Fais exactement ce qui est dans À FAIRE, évite tout ce qui est",
   "dans À NE PAS FAIRE. Si une idée n'est ni demandée ni interdite, dans le doute ABSTIENS-toi.",
@@ -54,16 +59,23 @@ const SYSTEM = [
   "Tu n'as PAS le contexte d'entreprise brut : seulement le pack d'ancrage filtré ;",
   "tu dois utiliser ses VALEURS EXACTES pour rester spécifique, jamais générique.",
   "",
-  "SCHEDULING : si la proposition d'appel n'est PAS autorisée ce tour, n'évoque NI appel,",
-  "NI créneau, NI horaire, NI jour, NI lien d'agenda. Réponds au fond sans pousser de rendez-vous.",
+  "SORTIE = 1 à 3 messages (champ messages). La PLUPART DU TEMPS 1 SEUL. Découpe en 2-3",
+  "messages SEULEMENT quand c'est naturel (ex: une courte réaction d'une ligne PUIS un",
+  "message substantiel, ou une question brève séparée). JAMAIS de spam ni de remplissage.",
+  "",
+  "SCHEDULING : la LOGISTIQUE concrète (horaire, jour, créneau, calendrier, « let's book »,",
+  "« find a time ») est interdite SAUF si autorisée ce tour. En revanche une SONDE D'INTÉRÊT",
+  "brève (« seriez-vous ouvert à un court échange ? ») est permise comme pont — sans aucun détail concret.",
   "",
   "LONGUEUR (CONTRAINTE DURE) : le body NE DOIT PAS dépasser la limite indiquée.",
   "Priorise l'essentiel, coupe le secondaire, reste sous la limite. Mieux vaut court et net.",
   "",
   "PLACEHOLDERS STRICTEMENT INTERDITS : n'écris JAMAIS de crochets [ … ] ni de gabarit",
   "type [First Name], [Your Name], [Company], [rôle]. Si une info manque, reformule sans elle.",
-  "SALUTATION : utilise le PRÉNOM du candidat s'il est fourni ; sinon n'utilise AUCUN nom",
-  "(ouverture sans nom), surtout pas un nom inventé ni un placeholder.",
+  "SALUTATION : UNIQUEMENT au tout 1er message de la conversation. Ensuite, AUCUNE salutation",
+  "(pas de « Bonjour »/« Hi » qui se répète). Utilise le PRÉNOM du candidat s'il est fourni ;",
+  "sinon AUCUN nom (« Bonjour, » / « Hi, » sans nom) — JAMAIS un nom inventé (« The »), JAMAIS un placeholder.",
+  "Dans un burst de plusieurs messages, seul le PREMIER peut saluer.",
   "SIGNATURE : signe avec le nom du persona s'il en a un ; sinon NE SIGNE PAS du tout.",
   "",
   "BARÈME DE REGISTRE — applique STRICTEMENT celui de la formality du message :",
@@ -115,14 +127,15 @@ function buildUser(args: WriteArgs): string {
     `ÉTAPE : ${args.stage}`,
     args.stage === "intro"
       ? [
-          "POSTURE D'OUVERTURE (contact FROID, aucune interaction préalable) — NON PRÉSOMPTUEUSE :",
-          "  - Ne présume RIEN sur l'intention du candidat. Il NE cherche PAS forcément à bouger.",
-          "  - INTERDIT : « le type de travail que vous voulez faire », « votre prochain poste »,",
-          "    « ce que vous recherchez », ou toute formule supposant une évaluation/recherche en cours.",
-          "  - Posture = présenter brièvement + inviter la curiosité, sans rien supposer.",
-          "  - Question d'ouverture du type « est-ce que ça vaut un coup d'œil ? » ou « plutôt en",
-          "    recherche active, ou vous gardez juste un œil ouvert ? » — PAS une question qui suppose",
-          "    qu'il évalue déjà des opportunités.",
+          "OUVERTURE (contact FROID) — commence par un HOOK, pas du boilerplate entreprise :",
+          "  - 1re phrase = l'angle le plus DISTINCTIF / CONTRASTANT du rôle, concret et court.",
+          "    Modèle : « La plupart des postes de Chief of Staff = gérer des agendas ; celui-ci = …».",
+          "    Accroche d'abord, contexte entreprise ensuite (1 ligne max).",
+          "  - NON-PRÉSOMPTION DANS LE TON, jamais ANNONCÉE : n'écris PAS « sans rien présumer »,",
+          "    « je ne présume pas… ». Ne présume simplement rien (pas de « le travail que vous",
+          "    voulez faire », « votre prochain poste », « ce que vous recherchez »).",
+          "  - Termine par une question légère qui n'assume pas une recherche en cours :",
+          "    « est-ce que ça vaut un coup d'œil ? » / « plutôt en recherche active, ou juste un œil ouvert ? ».",
         ].join("\n")
       : "",
     `DÉCISION À EXÉCUTER (ne dévie pas) : ${args.decision}`,
@@ -134,10 +147,13 @@ function buildUser(args: WriteArgs): string {
       ? `À NE PAS FAIRE ce tour-ci (interdits DURS) :\n${args.mustNotDo.map((s) => `  - ${s}`).join("\n")}`
       : "",
     args.schedulingAllowed
-      ? "SCHEDULING : autorisé ce tour (tu peux proposer un échange/créneau)."
-      : "SCHEDULING : INTERDIT ce tour — aucun appel, créneau, horaire, jour ni lien d'agenda.",
-    `CANAL : ${args.channelHint} — body ≤ ${args.bodyLimit} caractères (CONTRAINTE DURE : priorise, ne dépasse pas)${
-      args.channelHint === "email" ? " ; fournis aussi un subject" : " ; pas de subject"
+      ? "SCHEDULING : logistique d'appel autorisée ce tour (créneaux/horaires OK)."
+      : "SCHEDULING : logistique concrète INTERDITE ce tour (ni horaire, ni jour, ni créneau, ni lien). Une SONDE d'intérêt brève reste permise.",
+    args.allowGreeting
+      ? "SALUTATION : c'est le 1er message — une salutation est autorisée (1er message seulement)."
+      : "SALUTATION : conversation déjà entamée — AUCUNE salutation (pas de « Bonjour »/« Hi »).",
+    `CANAL : ${args.channelHint} — chaque message ≤ ${args.bodyLimit} caractères (CONTRAINTE DURE)${
+      args.channelHint === "email" ? " ; fournis un subject pour le 1er message" : " ; pas de subject"
     }.`,
     "",
     "PACK D'ANCRAGE (valeurs EXACTES à utiliser — pas d'invention) :",
@@ -156,13 +172,13 @@ function buildUser(args: WriteArgs): string {
   }
   parts.push(
     "",
-    `Écris le message final maintenant, en ${args.voiceProfile.language}, sous ${args.bodyLimit} caractères, sans aucun placeholder.`,
+    `Écris maintenant en ${args.voiceProfile.language}, chaque message sous ${args.bodyLimit} caractères, sans placeholder. 1 message par défaut (2-3 seulement si naturel).`,
   );
   return parts.filter(Boolean).join("\n");
 }
 
 export interface WriteResult {
-  message: WriteOutput | null;
+  messages: NextMessage[] | null;
   ok: boolean;
   error?: string;
   calls: number;
@@ -173,14 +189,17 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult> {
     model: MODELS.write,
     system: SYSTEM,
     user: buildUser(args),
-    toolName: "write_message",
-    toolDescription: "Rédige le message candidat (subject optionnel, body, channelHint).",
+    toolName: "write_messages",
+    toolDescription: "Rédige 1 à 3 messages candidat (channelHint + messages[{subject?, body}]).",
     schema: WriteOutputSchema,
     maxTokens: MAX_TOKENS.write,
     timeoutMs: TIMEOUTS.write,
   });
-  if (res.ok) return { message: res.value, ok: true, calls: res.calls };
-  return { message: null, ok: false, error: res.error, calls: res.calls };
+  if (!res.ok) return { messages: null, ok: false, error: res.error, calls: res.calls };
+  const messages: NextMessage[] = res.value.messages
+    .slice(0, 3)
+    .map((m) => ({ channelHint: res.value.channelHint, subject: m.subject, body: m.body }));
+  return { messages, ok: true, calls: res.calls };
 }
 
 // Troncature propre à la frontière de phrase (utilisée par la réparation déterministe).

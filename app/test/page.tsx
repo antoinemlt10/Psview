@@ -99,6 +99,7 @@ export default function TestPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [output, setOutput] = useState<AgentOutput | null>(null);
   const [draft, setDraft] = useState("");
+  const [pending, setPending] = useState<string[]>([]); // messages candidat en file
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const openedRef = useRef(false);
@@ -132,14 +133,15 @@ export default function TestPage() {
           throw new Error(j.error || `Agent returned ${res.status}`);
         }
         const out = (await res.json()) as AgentOutput;
-        const agentMsg: Message = {
+        // L'agent peut renvoyer plusieurs messages (burst) → une bulle chacun.
+        const agentMsgs: Message[] = out.nextMessages.map((m) => ({
           role: "agent",
-          content: out.nextMessage.body,
-          channel: out.nextMessage.channelHint,
-          subject: out.nextMessage.subject,
+          content: m.body,
+          channel: m.channelHint,
+          subject: m.subject,
           ts: Date.now(),
-        };
-        const next = [...conversation, agentMsg];
+        }));
+        const next = [...conversation, ...agentMsgs];
         setMessages(next);
         saveConversation(next);
         if (out.state) saveAgentState(out.state);
@@ -171,20 +173,43 @@ export default function TestPage() {
     }
   }, [runAgent]);
 
-  const sendReply = () => {
+  // Met en file un message candidat SANS déclencher l'agent (multi-messages entrée).
+  const queueReply = () => {
     const reply = draft.trim();
     if (!reply || !ctx || loading) return;
     const candidateMsg: Message = { role: "candidate", content: reply, ts: Date.now() };
     const withCandidate = [...messages, candidateMsg];
     setMessages(withCandidate);
+    saveConversation(withCandidate);
+    setPending((p) => [...p, reply]);
     setDraft("");
-    void runAgent(ctx, withCandidate, intent, reply);
+  };
+
+  // Déclenche l'agent : REASON traite le LOT de messages candidat non-répondus.
+  const requestAgentReply = () => {
+    if (!ctx || loading) return;
+    // un éventuel brouillon non encore mis en file est inclus
+    const draftText = draft.trim();
+    let convo = messages;
+    let batch = pending;
+    if (draftText) {
+      const candidateMsg: Message = { role: "candidate", content: draftText, ts: Date.now() };
+      convo = [...messages, candidateMsg];
+      batch = [...pending, draftText];
+      setMessages(convo);
+      saveConversation(convo);
+      setDraft("");
+    }
+    setPending([]);
+    const incoming = batch.length ? batch.join("\n\n") : undefined;
+    void runAgent(ctx, convo, intent, incoming);
   };
 
   const resetConversation = () => {
     if (!ctx) return;
     clearConversation();
     setMessages([]);
+    setPending([]);
     setOutput(null);
     void runAgent(ctx, [], intent);
   };
@@ -303,28 +328,45 @@ export default function TestPage() {
             <label className="mb-2 block text-sm font-medium text-ink">
               Reply as the candidate
             </label>
+            {pending.length > 0 && (
+              <p className="mb-2 text-xs text-muted">
+                {pending.length} message{pending.length > 1 ? "s" : ""} queued — the agent will
+                process them together.
+              </p>
+            )}
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
-                  sendReply();
+                  requestAgentReply();
                 }
               }}
               placeholder="e.g. Sounds interesting but I'm pretty swamped this quarter…"
               className="min-h-[80px] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none transition-colors focus:border-ink"
             />
-            <div className="mt-2 flex items-center justify-between">
-              <span className="text-xs text-muted">⌘/Ctrl + Enter to send</span>
-              <button
-                type="button"
-                onClick={sendReply}
-                disabled={loading || !draft.trim()}
-                className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-on-dark transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Send reply
-              </button>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span className="text-xs text-muted">＋ queue more, then let the agent reply</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={queueReply}
+                  disabled={loading || !draft.trim()}
+                  className="rounded-lg border border-line bg-surface px-3 py-2 text-sm font-medium text-ink transition-colors hover:border-ink disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  + Add another
+                </button>
+                <button
+                  type="button"
+                  onClick={requestAgentReply}
+                  disabled={loading || (!draft.trim() && pending.length === 0)}
+                  className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-on-dark transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Send{pending.length > 0 ? ` (${pending.length + (draft.trim() ? 1 : 0)})` : ""} →
+                  agent
+                </button>
+              </div>
             </div>
           </div>
         </div>
