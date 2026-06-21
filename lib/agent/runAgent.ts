@@ -15,11 +15,10 @@ import {
   emptyCandidateMemory,
   emptyAgentMemory,
   applyMemoryOps,
-  updateTemperature,
   deriveStyleAdjustments,
 } from "./memory";
 import { runReason, cheapDetectLang, resolveActiveLanguage } from "./reason";
-import { applyInvariants, candidateAskedForCall } from "./invariants";
+import { applyInvariants, candidateAskedForCall, assessEngagement } from "./invariants";
 import { buildGroundingPack, buildForbiddenList } from "./grounding";
 import { runWrite, fallbackMessage, fallbackLang, type WriteArgs } from "./write";
 import {
@@ -142,7 +141,14 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     // voient la mémoire FRAÎCHE (incl. une objection levée à ce tour). ──
     const applied = applyMemoryOps(candidateMemory, reasonRes.reason.memoryOps, turn);
     candidateMemory = applied.memory;
-    candidateMemory.temperature = updateTemperature(candidateMemory, input.incomingCandidateReply);
+
+    // ── ENGAGEMENT du candidat (intérêt actif) → pilote la température ET le gate
+    //    propose_call. C'est le signal CANDIDAT, jamais mon read de fit. ──
+    const activeNegatives =
+      candidateMemory.rejections.filter((e) => e.status === "active").length +
+      candidateMemory.objections.filter((e) => e.status === "active").length;
+    const engagement = assessEngagement(candidateTexts, activeNegatives);
+    candidateMemory.temperature = engagement.temperature;
 
     // ── 2) Ancrage + garde-fous (déterministe, 0 LLM) ──
     const inv = applyInvariants(reasonRes.reason, {
@@ -152,6 +158,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       agentMem: agentMemory,
       hasHistory,
       priorStage: prior?.plan.currentStage,
+      candidateInterested: engagement.interested,
     });
     const reason = inv.reason;
 

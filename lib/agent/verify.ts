@@ -76,6 +76,37 @@ export function outputLanguageViolations(haystack: string, target: "fr" | "en" |
   return v;
 }
 
+// Markdown interdit (canaux en texte brut). Détecte gras/italique, titres, puces,
+// citations, code inline, liens markdown.
+const MD_PATTERNS: RegExp[] = [
+  /\*\*[^*]+\*\*/, // **gras**
+  /__[^_]+__/, // __gras__
+  /(?<![A-Za-z0-9])\*[^\s*][^*]*\*(?![A-Za-z0-9])/, // *italique*
+  /^\s{0,3}#{1,6}\s+/m, // # titre
+  /^\s*[-*+]\s+/m, // puce - * +
+  /^\s*>\s+/m, // > citation
+  /`[^`]+`/, // `code`
+  /\[[^\]\n]+\]\([^)\n]+\)/, // [texte](lien)
+];
+export function hasMarkdown(text: string): boolean {
+  return MD_PATTERNS.some((re) => re.test(text));
+}
+// Conversion déterministe markdown → texte brut (strip, structure préservée).
+export function stripMarkdown(text: string): string {
+  return text
+    .replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, "$1 ($2)") // liens
+    .replace(/`([^`]+)`/g, "$1") // code inline
+    .replace(/\*\*([^*]+)\*\*/g, "$1") // gras **
+    .replace(/__([^_]+)__/g, "$1") // gras __
+    .replace(/(?<![A-Za-z0-9])\*([^\s*][^*]*)\*(?![A-Za-z0-9])/g, "$1") // italique *
+    .replace(/(?<![A-Za-z0-9])_([^\s_][^_]*)_(?![A-Za-z0-9])/g, "$1") // italique _
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "") // titres
+    .replace(/^\s*>\s+/gm, "") // citations
+    .replace(/^\s*[-*+]\s+/gm, "• ") // puces → bullet texte brut
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 export interface DeterministicCtx {
   forbidden: ForbiddenList;
   voiceProfile: VoiceProfile;
@@ -137,6 +168,9 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
 
   // 3d) Gate de langue : message entièrement dans outputLang (corps + salutation).
   violations.push(...outputLanguageViolations(haystack, ctx.outputLang));
+
+  // 3e) Markdown interdit (canaux texte brut).
+  if (hasMarkdown(haystack)) violations.push("Markdown présent (canal en texte brut).");
 
   // 4) Mémoire : reproposition d'un sujet banni (rejet/écarté actif).
   for (const topic of ctx.forbidden.bannedTopics) {
@@ -303,6 +337,10 @@ function tidy(s: string): string {
 export function repairMessage(msg: NextMessage, ctx: DeterministicCtx): NextMessage {
   let body = msg.body;
   let subject = msg.subject;
+
+  // 0) Markdown → texte brut (strip déterministe, structure préservée).
+  if (hasMarkdown(body)) body = stripMarkdown(body);
+  if (subject && hasMarkdown(subject)) subject = stripMarkdown(subject);
 
   const dropSentence = (pred: (s: string) => boolean) => {
     body = splitSentences(body)

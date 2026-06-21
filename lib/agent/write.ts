@@ -90,6 +90,10 @@ const SYSTEM = [
   "aucun pronom ni sujet implicite sans référent (« It's built in. » sans dire de quoi ;",
   "« Not a stretch, not occasional. » sans sujet). Si tu raccourcis, garde le référent.",
   "",
+  "TEXTE BRUT UNIQUEMENT — JAMAIS de markdown : pas de ** ni * (gras/italique), pas de #,",
+  "pas de puces « - » / « * », pas de « > », pas de `code`, pas de [texte](lien). Le canal",
+  "affiche le markdown en BRUT. Structure via sauts de ligne et labels en clair (« Label : »).",
+  "",
   "Réponds UNIQUEMENT via le tool fourni.",
 ].join("\n");
 
