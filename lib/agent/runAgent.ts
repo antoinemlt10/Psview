@@ -18,7 +18,7 @@ import {
   updateTemperature,
   deriveStyleAdjustments,
 } from "./memory";
-import { runReason, cheapDetectLang } from "./reason";
+import { runReason, cheapDetectLang, resolveActiveLanguage } from "./reason";
 import { applyInvariants, candidateAskedForCall } from "./invariants";
 import { buildGroundingPack, buildForbiddenList } from "./grounding";
 import { runWrite, fallbackMessage, fallbackLang, type WriteArgs } from "./write";
@@ -118,14 +118,24 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     calls += reasonRes.calls;
     if (!reasonRes.ok) errors.push(`reason: ${reasonRes.error ?? "échec"} (fallback déterministe)`);
 
-    // ── LANGUE ACTIVE : suit la conversation, pas voice.language. ──
-    // S'il y a un message candidat → langue détectée par REASON ; sinon (1er message
-    // sortant) → langue de la voix configurée.
-    const hasCandidateMsg =
-      !!input.incomingCandidateReply?.trim() ||
-      input.conversation.some((m) => m.role === "candidate");
-    const detected = reasonRes.reason.detectedLanguage?.trim();
-    const activeLanguage = hasCandidateMsg && detected ? detected : ctx.voice.language;
+    // ── LANGUE ACTIVE : dominante + STICKY sur la conversation (déterministe). ──
+    // On mirror le candidat mais sur la langue DOMINANTE, pas sur le dernier mot :
+    // un loanword isolé (« mec ») ne flip pas une conv anglaise. Flip seulement sur
+    // switch clair et soutenu. REASON.detectedLanguage n'est qu'un repli faible.
+    const candidateTexts = input.conversation
+      .filter((m) => m.role === "candidate")
+      .map((m) => m.content);
+    const incoming = input.incomingCandidateReply?.trim();
+    if (incoming && candidateTexts[candidateTexts.length - 1] !== incoming) {
+      candidateTexts.push(incoming);
+    }
+    const activeLanguage = resolveActiveLanguage({
+      candidateTexts,
+      priorLanguage: prior?.personality.voiceProfile.language,
+      voiceLanguage: reasonRes.reason.detectedLanguage?.trim() && candidateTexts.length === 1
+        ? reasonRes.reason.detectedLanguage.trim()
+        : ctx.voice.language,
+    });
 
     // ── Application des MemoryOps (state) — AVANT les invariants, pour que ceux-ci
     // voient la mémoire FRAÎCHE (incl. une objection levée à ce tour). ──

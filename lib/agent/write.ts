@@ -76,6 +76,16 @@ const SYSTEM = [
   "    argot (« ouais », « grave », « chiant », « trop stylé ») ; ponctuation « !!! » / « ??? ».",
   "EMOJI : même en 'liberal', 1–2 emojis qui PONCTUENT, jamais un par ligne.",
   "",
+  "FORMALITÉ = PLANCHER, jamais mirrorée depuis le candidat. Le niveau de formalité",
+  "est FIXE (celui indiqué). Même si le candidat écrit très relâché (« lol », « mec »,",
+  "emojis, fautes), tu NE descends JAMAIS sous ce niveau : un candidat familier ne te",
+  "fait pas passer en tutoiement si la formalité est 'formal'/'neutral'. Le seul effet",
+  "autorisé du registre candidat est de moduler la CHALEUR DANS la bande de formalité",
+  "(plus chaleureux, jamais moins formel). 'formal' reste formel-chaleureux.",
+  "",
+  "LANGUE = tout le message dans la langue active (salutation + corps + signature).",
+  "JAMAIS de mélange : pas de « Bonjour » + corps en anglais + « Alex » en signature.",
+  "",
   "Réponds UNIQUEMENT via le tool fourni.",
 ].join("\n");
 
@@ -89,12 +99,24 @@ function buildUser(args: WriteArgs): string {
       ? `PRÉNOM CANDIDAT : ${args.candidateName} (à utiliser dans la salutation).`
       : "PRÉNOM CANDIDAT : inconnu — n'utilise AUCUN nom (jamais de placeholder type [First Name]).",
     args.voiceProfile.styleAdjustments.length
-      ? `AJUSTEMENTS DE STYLE (feedback candidat, à appliquer) :\n${args.voiceProfile.styleAdjustments
+      ? `AJUSTEMENTS DE STYLE (feedback candidat — modulent la CHALEUR seulement,\nJAMAIS la formalité sous le plancher « ${args.voiceProfile.formality} ») :\n${args.voiceProfile.styleAdjustments
           .map((s) => `  - ${s}`)
           .join("\n")}`
       : "",
     "",
     `ÉTAPE : ${args.stage}`,
+    args.stage === "intro"
+      ? [
+          "POSTURE D'OUVERTURE (contact FROID, aucune interaction préalable) — NON PRÉSOMPTUEUSE :",
+          "  - Ne présume RIEN sur l'intention du candidat. Il NE cherche PAS forcément à bouger.",
+          "  - INTERDIT : « le type de travail que vous voulez faire », « votre prochain poste »,",
+          "    « ce que vous recherchez », ou toute formule supposant une évaluation/recherche en cours.",
+          "  - Posture = présenter brièvement + inviter la curiosité, sans rien supposer.",
+          "  - Question d'ouverture du type « est-ce que ça vaut un coup d'œil ? » ou « plutôt en",
+          "    recherche active, ou vous gardez juste un œil ouvert ? » — PAS une question qui suppose",
+          "    qu'il évalue déjà des opportunités.",
+        ].join("\n")
+      : "",
     `DÉCISION À EXÉCUTER (ne dévie pas) : ${args.decision}`,
     `OBJECTIF : ${args.nextObjective}`,
     args.mustDo.length

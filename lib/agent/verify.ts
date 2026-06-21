@@ -3,7 +3,7 @@ import type { ChannelHint, NextMessage, VoiceProfile } from "./types";
 import type { ForbiddenList } from "./grounding";
 import { callStructured } from "./llm";
 import { MODELS, MAX_TOKENS, TIMEOUTS } from "./config";
-import { truncateToSentence } from "./write";
+import { truncateToSentence, fallbackLang } from "./write";
 
 // © ® ™ sont Extended_Pictographic mais PAS des emojis : on les exclut.
 const NON_EMOJI = new Set([0xa9, 0xae, 0x2122]);
@@ -122,6 +122,17 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
     }
     if (haystack.includes("!!!") || haystack.includes("???")) {
       violations.push("Ponctuation excessive (!!! / ???) — pas en casual propre.");
+    }
+  }
+
+  // 6b) PLANCHER DE FORMALITÉ : en formal/neutral, pas d'ouverture décontractée
+  //     (Salut/Coucou/Yo/Hey/Wesh) — la familiarité du candidat ne baisse pas le niveau.
+  if (ctx.voiceProfile.formality !== "casual") {
+    const opening = msg.body.trimStart();
+    if (/^(salut\b|coucou\b|yo\b|hey\b|wesh\b)/i.test(opening)) {
+      violations.push(
+        `Ouverture trop décontractée pour le niveau « ${ctx.voiceProfile.formality} » (plancher de formalité).`,
+      );
     }
   }
 
@@ -285,6 +296,16 @@ export function repairMessage(msg: NextMessage, ctx: DeterministicCtx): NextMess
       body = body.replace(re, "");
     }
     body = body.replace(/!{2,}/g, "!").replace(/\?{2,}/g, "?");
+  } else {
+    // 6b) Plancher de formalité : ouverture décontractée → salutation correcte
+    //     dans la langue active (« Salut Alex » → « Bonjour Alex, » / « Hello Alex, »).
+    body = body.replace(
+      /^\s*(?:salut|coucou|hey|yo|wesh)\b[\s,!?-]*([\p{L}][\p{L}'-]*)?[\s,!?.-]*/iu,
+      (_m, name?: string) => {
+        const hi = fallbackLang(ctx.voiceProfile.language) === "fr" ? "Bonjour" : "Hello";
+        return name ? `${hi} ${name}, ` : `${hi}, `;
+      },
+    );
   }
   // 7) Emoji interdit → retirés.
   if (ctx.voiceProfile.emojiUse === "none") body = stripEmojiChars(body);

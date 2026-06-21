@@ -124,6 +124,10 @@ function buildUser(input: AgentInput, mem: CandidateMemory, agentMem: AgentMemor
     "colle au rôle », « poser UNE question sur le parcours »). mustNotDo = ce qu'il ne faut PAS faire",
     "ce tour-ci (ex: « proposer un appel ou un créneau », « re-présenter des excuses », « re-décrire",
     "le rôle déjà couvert », « re-poser une question déjà posée »). Le writer EXÉCUTE ces directives.",
+    "OUVERTURE À FROID (stage intro, aucune interaction préalable) : reste NON PRÉSOMPTUEUX —",
+    "ne suppose PAS que le candidat cherche à bouger. Pas de « le travail que vous voulez faire »",
+    "ni « votre prochain poste ». Présente + invite la curiosité (« worth a look ? », « en recherche",
+    "active ou juste un œil ouvert ? »). Mets cette interdiction dans mustNotDo au stage intro.",
   ].join("\n");
 }
 
@@ -155,18 +159,58 @@ export async function runReason(
   return { reason: fallbackReason(input, mem), ok: false, error: res.error, calls: res.calls };
 }
 
-// Détection de langue déterministe (backstop quand REASON est indisponible).
-// Renvoie "fr" / "en" / "" — suffisant pour choisir un fallback dans la bonne langue.
+// Détection de langue déterministe d'UN message. Renvoie "fr" / "en" / ""
+// ("" = pas assez de signal, ex: « lol ok cool mec » — un loanword isolé ne suffit pas).
 export function cheapDetectLang(text: string): string {
   const t = ` ${text.toLowerCase()} `;
   if (!t.trim()) return "";
-  const fr = /[éèêàùçœ]| je | tu | vous | nous | bonjour | merci | pas | suis | très | bien | le | la | les | un | une | est | avec | pour /;
-  const en = / the | you | your | i'm | i am | not | very | with | for | thanks | hello | hi | looking | role /;
-  const frHits = (t.match(fr) ? 1 : 0) + (/[éèêàùçœ]/.test(t) ? 1 : 0);
-  const enHits = t.match(en) ? 1 : 0;
-  if (frHits > enHits) return "fr";
-  if (enHits > 0) return "en";
+  const fr = /[éèêàùçœ]| je | tu | vous | nous | bonjour | merci | pas | suis | très | bien | le | la | les | une | est | avec | pour | sur | dans | mais /g;
+  const en = / the | you | your | i'm | i am | not | very | with | for | thanks | hello | looking | role | but | and | that | what /g;
+  const frHits = (t.match(fr)?.length ?? 0) + (/[éèêàùçœ]/.test(t) ? 1 : 0);
+  const enHits = t.match(en)?.length ?? 0;
+  // Exiger une marge nette : un seul mot d'une langue dans une phrase de l'autre ne flip pas.
+  if (frHits >= enHits + 2) return "fr";
+  if (enHits >= frHits + 2) return "en";
+  if (frHits > enHits && frHits >= 2) return "fr";
+  if (enHits > frHits && enHits >= 2) return "en";
   return "";
+}
+
+// LANGUE ACTIVE = dominante + STICKY sur la conversation (déterministe, 0 LLM).
+// - On part de la langue dominante de TOUS les messages candidats clairs.
+// - On ne FLIP vers une autre langue que sur switch CLAIR ET SOUTENU
+//   (les 2 derniers messages candidats clairs concordent sur la nouvelle langue).
+// - Un loanword isolé (« mec ») détecte "" → n'influence rien.
+// - Repli : langue précédente, sinon voice.language.
+export function resolveActiveLanguage(opts: {
+  candidateTexts: string[]; // messages candidats, ordre chronologique
+  priorLanguage?: string; // langue active du tour précédent (sticky)
+  voiceLanguage: string; // défaut configuré (cold open)
+}): string {
+  const dets = opts.candidateTexts.map(cheapDetectLang);
+  const clear = dets.filter(Boolean);
+  if (clear.length === 0) return opts.priorLanguage || opts.voiceLanguage;
+
+  // Dominante sur toute la conversation.
+  const counts: Record<string, number> = {};
+  for (const d of clear) counts[d] = (counts[d] ?? 0) + 1;
+  const dominant = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+
+  const baseline = opts.priorLanguage || opts.voiceLanguage;
+
+  // Switch soutenu : les 2 derniers messages candidats CLAIRS concordent.
+  const lastTwoClear = clear.slice(-2);
+  const sustained =
+    lastTwoClear.length === 2 && lastTwoClear[0] === lastTwoClear[1] ? lastTwoClear[0] : null;
+
+  // Un seul message candidat dans toute la conv → on miroir s'il est clair.
+  if (opts.candidateTexts.length === 1) return clear[0] ?? baseline;
+
+  // Flip seulement si la dominante diffère du baseline ET que c'est soutenu.
+  if (dominant !== baseline && sustained === dominant) return dominant;
+  // Si le baseline n'apparaît jamais et une seule langue est utilisée → on l'adopte.
+  if (!clear.includes(baseline) && new Set(clear).size === 1) return clear[0];
+  return baseline;
 }
 
 // Fallback déterministe : un raisonnement sûr ancré sur le contexte, 0 LLM.
@@ -215,10 +259,20 @@ export function fallbackReason(input: AgentInput, mem: CandidateMemory): ReasonO
     ),
     mustDo:
       stage === "intro"
-        ? ["ouvrir le contact en ancrant sur l'entreprise et le rôle"]
+        ? [
+            "présenter brièvement l'entreprise et le rôle, ancré sur le contexte",
+            "inviter la curiosité par une question d'ouverture non présomptueuse (worth a look ? / en recherche active ou juste un œil ouvert ?)",
+          ]
         : stage === "handle_objection"
           ? ["accuser réception de la réticence", "répondre brièvement sans re-pitcher"]
           : ["répondre à ce que le candidat vient de dire", "poser une question utile"],
-    mustNotDo: ["proposer un appel ou un créneau", "re-présenter des excuses", "re-décrire ce qui est déjà couvert"],
+    mustNotDo: [
+      "proposer un appel ou un créneau",
+      "re-présenter des excuses",
+      "re-décrire ce qui est déjà couvert",
+      ...(stage === "intro"
+        ? ["présumer que le candidat cherche à bouger ou évalue déjà des opportunités"]
+        : []),
+    ],
   };
 }
