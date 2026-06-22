@@ -61,6 +61,35 @@ function safeFallback(args: WriteArgs, vctx: DeterministicCtx): NextMessage {
   return { channelHint: vctx.channelHint, body: fr ? "Bonjour." : "Hello." };
 }
 
+// Valide la FORME d'un priorState (vient du client, non fiable). Renvoie true seulement
+// si tous les champs déréférencés par le carry sont présents et du bon type.
+function isValidPriorState(s: AgentState | null | undefined): s is AgentState {
+  if (!s || typeof s !== "object") return false;
+  const a = s as Partial<AgentState>;
+  const arr = (x: unknown) => Array.isArray(x);
+  const cm = a.candidateMemory as Partial<CandidateMemory> | undefined;
+  return (
+    typeof a.personaKey === "string" &&
+    !!a.personality?.voiceProfile &&
+    typeof a.personality.voiceProfile.language === "string" &&
+    !!a.plan &&
+    typeof a.plan.currentStage === "string" &&
+    !!cm &&
+    arr(cm.rejections) &&
+    arr(cm.constraints) &&
+    arr(cm.objections) &&
+    arr(cm.facts) &&
+    arr(cm.dismissedTopics) &&
+    arr(cm.styleFeedback) &&
+    !!a.agentMemory &&
+    arr(a.agentMemory.pointsMade) &&
+    arr(a.agentMemory.questionsAsked) &&
+    arr(a.agentMemory.proposalsMade) &&
+    !!a.counters &&
+    typeof a.counters.messagesSent === "number"
+  );
+}
+
 // L'interface PUBLIQUE du moteur. NE THROW JAMAIS : en cas d'erreur, renvoie un
 // AgentOutput utilisable (message fallback) avec meta.ok=false et meta.errors rempli.
 export async function runAgent(input: AgentInput): Promise<AgentOutput> {
@@ -70,7 +99,12 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   try {
     const ctx = input.companyContext;
     const personaKey = hashContext(ctx);
-    const prior = input.priorState ?? null;
+    // priorState arrive en JSON OPAQUE du client (localStorage) : un blob d'un ancien
+    // schéma ou tronqué ferait crasher le carry. On valide la forme et, si invalide,
+    // on repart proprement (sans throw, sans poison) plutôt que de déréférencer à l'aveugle.
+    const rawPrior = input.priorState ?? null;
+    const prior = isValidPriorState(rawPrior) ? rawPrior : null;
+    if (rawPrior && !prior) errors.push("priorState malformed/old-shape → reset (fresh start)");
 
     // ── Personnalité ──
     // Le persona ne se régénère QUE si le contexte a changé (personaKey différent).
@@ -129,11 +163,19 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       .filter((m) => m.role === "candidate")
       .map((m) => m.content);
     const incoming = input.incomingCandidateReply?.trim();
-    // On ajoute l'incoming aux candidateTexts uniquement s'il s'agit d'un message
-    // SIMPLE pas déjà présent. Un LOT joint (séparé par lignes vides) est déjà dans
-    // la conversation → on ne le recompte pas (langue/engagement).
-    if (incoming && !incoming.includes("\n\n") && candidateTexts[candidateTexts.length - 1] !== incoming) {
-      candidateTexts.push(incoming);
+    // On ajoute l'incoming aux candidateTexts UNIQUEMENT s'il n'y est pas déjà —
+    // de façon robuste (pas de sniff « \n\n ») : l'UI met les messages candidats à la
+    // fois dans `conversation` ET dans `incoming` (lot joint par \n\n). On détecte donc
+    // si l'incoming est : (a) le dernier message déjà présent (cas simple, même
+    // paragraphé), ou (b) le LOT joint des derniers messages déjà présents. Sinon
+    // (API/CLI : incoming non présent dans conversation) on l'ajoute.
+    if (incoming) {
+      const parts = incoming.split(/\n\n+/).map((s) => s.trim()).filter(Boolean);
+      const tail = candidateTexts.slice(-parts.length);
+      const batchAlreadyPresent =
+        parts.length > 1 && tail.length === parts.length && parts.every((p, i) => tail[i] === p);
+      const singleAlreadyLast = candidateTexts[candidateTexts.length - 1] === incoming;
+      if (!batchAlreadyPresent && !singleAlreadyLast) candidateTexts.push(incoming);
     }
     const activeLanguage = resolveActiveLanguage({
       candidateTexts,
@@ -428,7 +470,9 @@ function catastrophicFallback(input: AgentInput, errors: string[], calls: number
     subject: fr ? `Un mot de ${name}` : `A note from ${name}`,
     body,
   };
-  const state: AgentState = input.priorState ?? {
+  // N'échoie le priorState QUE s'il est valide — sinon on renverrait un blob corrompu
+  // qui re-crasherait le tour suivant. Un priorState invalide → état propre repart de zéro.
+  const state: AgentState = (isValidPriorState(input.priorState) ? input.priorState : null) ?? {
     personaKey: ctx ? hashContext(ctx) : "persona_unknown",
     personality,
     plan,

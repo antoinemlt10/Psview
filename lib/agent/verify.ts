@@ -34,8 +34,11 @@ function escapeRegex(s: string): string {
 // SCHEDULING — deux niveaux.
 // CONCRET = logistique d'un rendez-vous (horaires, jours, créneaux, calendrier,
 //   « let's book », « find a time »). Interdit hors propose_call/confirm_logistics.
+// Affiné pour éviter les faux positifs : pas de « zoom »/« slot »/« 9h » nus
+// (→ "slot machine", "9h/day"), et les jours de semaine ne matchent pas un nom de
+// domaine (« Monday.com »). On garde les vrais signaux de logistique.
 const CONCRETE_SCHEDULING_RE =
-  /\b(?:cr[ée]neau|planifi|disponib|agenda|calend|calendly|cal\.com|zoom|book a|let'?s book|find a time|set up a (?:time|meeting|call)|pick a time|lundi|mardi|mercredi|jeudi|vendredi|monday|tuesday|wednesday|thursday|friday|tomorrow|demain|next week|la semaine prochaine)\b|\b\d{1,2}\s?(?:h|am|pm)\b|\b\d{1,2}:\d{2}\b|\bslot\b/i;
+  /\b(?:cr[ée]neau|planifi|disponib|agenda|calend|calendly|cal\.com|book a|let'?s book|find a time|set up a (?:time|meeting|call)|pick a time|tomorrow|demain|next week|la semaine prochaine)\b|\b(?:monday|tuesday|wednesday|thursday|friday|lundi|mardi|mercredi|jeudi|vendredi)\b(?!\.)|\b\d{1,2}\s?(?:am|pm)\b|\b\d{1,2}:\d{2}\b/i;
 // SONDE D'INTÉRÊT = simple pont (« are you open to a short call? ») — autorisée partout.
 const CALL_PROBE_RE =
   /\b(open to (?:a )?(?:short |quick |brief )?(?:call|chat)|up for (?:a )?(?:call|chat)|worth a (?:quick )?(?:call|chat)|ouvert[e]? à (?:un|une) (?:court[e]? )?(?:[ée]change|appel|discussion))\b/i;
@@ -43,9 +46,10 @@ const CALL_PROBE_RE =
 export function hasConcreteScheduling(text: string): boolean {
   return CONCRETE_SCHEDULING_RE.test(text);
 }
-// Conservé (large) pour la journalisation des moves, PAS pour le gate.
+// Pour la journalisation des moves (PAS le gate) : logistique concrète OU sonde.
+// (Plus de clause « call|meeting » nue : elle flaggait tout message mentionnant « call ».)
 export function hasSchedulingLanguage(text: string): boolean {
-  return CONCRETE_SCHEDULING_RE.test(text) || CALL_PROBE_RE.test(text) || /\b(call|appel|meeting|rendez-?vous|rdv)\b/i.test(text);
+  return CONCRETE_SCHEDULING_RE.test(text) || CALL_PROBE_RE.test(text);
 }
 
 // Normalise une langue (code ou nom) en "fr"/"en"/null (null = non vérifiable ici).
@@ -58,8 +62,11 @@ export function normalizeLang(l: string | undefined): "fr" | "en" | null {
 
 // Marqueurs forts par langue (mots-fonction + accents) pour détecter une FUITE
 // de langue dans le message produit — y compris une salutation isolée.
+// Mots-fonction français uniquement. On NE compte PAS les caractères accentués nus :
+// l'anglais courant emploie des emprunts accentués (résumé, café, exposé, déjà vu) qui
+// faisaient passer un message anglais pour français (faux positif → régénération inutile).
 const FR_MARKERS =
-  /[éèêàâîïôûùçœ]|\b(bonjour|bonsoir|salut|coucou|merci|cordialement|vous|votre|vos|nous|notre|nos|je|tu|avec|pour|dans|chez|[ée]quipe|poste|entreprise|ravi|ouvert|[ée]change|n'h[ée]sitez)\b/gi;
+  /\b(bonjour|bonsoir|salut|coucou|merci|cordialement|vous|votre|vos|nous|notre|nos|je|tu|avec|pour|dans|chez|[ée]quipe|poste|entreprise|ravi|ouvert|[ée]change|n'h[ée]sitez|c'est|nous sommes|au sujet)\b/gi;
 const EN_MARKERS =
   /\b(hello|hi|hey|dear|thanks|thank you|regards|your|you|we|we're|our|the|with|for|role|team|company|reach|reaching|looking|open to|would you|happy to|about)\b/gi;
 const FR_GREETING = /^\s*(bonjour|bonsoir|salut|coucou)\b/i;
@@ -135,25 +142,6 @@ export interface DeterministicCtx {
   allowGreeting: boolean; // salutation autorisée (= tout 1er message agent de la conv)
   candidateName?: string; // prénom réel du candidat (sinon : aucun nom)
   isIntro: boolean; // étape intro (contact froid)
-}
-
-// VERIFY est déterministe par DÉFAUT. On ne paie l'appel LLM que si c'est AMBIGU :
-// le message partage un mot significatif avec un sujet banni / une info connue
-// sans avoir été attrapé par le check littéral → reproposition/re-demande possible.
-// Sinon (cas courant) : pas de 3e appel → meta.llmCallsFired = 2 sur un tour de réaction.
-function sigTokens(s: string): Set<string> {
-  return new Set((s.toLowerCase().match(/\p{L}{4,}/gu) ?? []));
-}
-export function needsLlmVerify(msg: NextMessage, forbidden: ForbiddenList): boolean {
-  const body = sigTokens(`${msg.subject ?? ""} ${msg.body}`);
-  if (body.size === 0) return false;
-  const risky = [...forbidden.bannedTopics, ...forbidden.knownFacts];
-  for (const item of risky) {
-    for (const tok of sigTokens(item)) {
-      if (body.has(tok)) return true;
-    }
-  }
-  return false;
 }
 
 // CHECKS DURS EN CODE — rapides, sans LLM. Renvoie la liste des violations.

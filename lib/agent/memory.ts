@@ -179,46 +179,5 @@ export function deriveStyleAdjustments(mem: CandidateMemory): string[] {
   return enforcedEntries(mem, "styleFeedback").map((e) => e.content);
 }
 
-// Met à jour la température (déterministe) à partir de la mémoire + du dernier message.
-export function updateTemperature(
-  mem: CandidateMemory,
-  incomingReply: string | undefined,
-): CandidateMemory["temperature"] {
-  let score = 0;
-  score += enforcedEntries(mem, "facts").length; // engagement : partage d'infos
-  score -= 1.5 * enforcedEntries(mem, "rejections").length;
-  score -= 1 * enforcedEntries(mem, "objections").length;
-  score += 1.5 * mem.objections.filter((e) => e.status === "resolved").length;
-
-  const text = (incomingReply ?? "").toLowerCase();
-  const positive = [
-    "intéress",
-    "curieu",
-    "ok pour",
-    "d'accord",
-    "parlons",
-    "dispo",
-    "volontiers",
-    "interested",
-    "let's talk",
-    "sounds good",
-    "sure",
-  ];
-  const negative = [
-    "pas intéress",
-    "non merci",
-    "bien là où",
-    "happy where",
-    "not interested",
-    "no thanks",
-    "stop",
-    "leave me",
-  ];
-  if (positive.some((p) => text.includes(p))) score += 2;
-  if (negative.some((n) => text.includes(n))) score -= 2;
-
-  if (score <= -2) return "cold";
-  if (score <= 0) return "lukewarm";
-  if (score <= 2) return "warm";
-  return "hot";
-}
+// (updateTemperature retiré : remplacé par assessEngagement dans invariants.ts,
+//  qui pilote la température sur l'engagement candidat — voir runAgent.)
