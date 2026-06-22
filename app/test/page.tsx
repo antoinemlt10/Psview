@@ -18,6 +18,9 @@ import type { AgentInput, AgentOutput, CompanyContext, Message } from "@/lib/typ
 const DEFAULT_INTENT =
   "engage this candidate for the open role and book a call";
 
+// Délai d'inactivité de frappe (ms) avant que l'agent réponde automatiquement.
+const AUTO_REPLY_MS = 3000;
+
 function PersonaCard({ p }: { p: AgentOutput["personality"] }) {
   const name = p.persona.split(/[—-]/)[0]?.trim() || "Agent";
   const initial = name.charAt(0).toUpperCase();
@@ -208,6 +211,19 @@ export default function TestPage() {
     void runAgent(ctx, convo, intent, incoming);
   };
 
+  // L'agent répond TOUT SEUL quand le candidat arrête de taper (debounce).
+  // Tant que `draft` ou `pending` changent (= frappe / envoi), le minuteur est
+  // réarmé → l'agent n'interrompt jamais une saisie en cours. Quand ça se stabilise
+  // pendant AUTO_REPLY_MS avec du contenu à traiter, il répond.
+  const replyRef = useRef(requestAgentReply);
+  replyRef.current = requestAgentReply;
+  useEffect(() => {
+    if (!ready || !ctx || loading) return;
+    if (pending.length === 0 && !draft.trim()) return; // rien à traiter
+    const id = setTimeout(() => replyRef.current(), AUTO_REPLY_MS);
+    return () => clearTimeout(id);
+  }, [draft, pending, loading, ctx, ready]);
+
   const resetConversation = () => {
     if (!ctx) return;
     clearConversation();
@@ -331,10 +347,10 @@ export default function TestPage() {
             <label className="mb-2 block text-sm font-medium text-ink">
               Reply as the candidate
             </label>
-            {pending.length > 0 && (
+            {(pending.length > 0 || draft.trim()) && !loading && (
               <p className="mb-2 text-xs text-muted">
-                {pending.length} message{pending.length > 1 ? "s" : ""} en file — clique « Agent
-                replies → » quand tu as fini d'écrire.
+                {pending.length > 0 ? `${pending.length} message${pending.length > 1 ? "s" : ""} en file — ` : ""}
+                l'agent répond automatiquement dès que tu arrêtes d'écrire (~3 s).
               </p>
             )}
             <textarea
@@ -356,7 +372,7 @@ export default function TestPage() {
             />
             <div className="mt-2 flex items-center justify-between gap-2">
               <span className="text-xs text-muted">
-                Entrée = envoyer un message · Maj+Entrée = saut de ligne
+                Entrée = envoyer un message · Maj+Entrée = saut de ligne · l'agent répond à la pause
               </span>
               <div className="flex gap-2">
                 <button
@@ -372,8 +388,9 @@ export default function TestPage() {
                   onClick={requestAgentReply}
                   disabled={loading || (!draft.trim() && pending.length === 0)}
                   className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-on-dark transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Ne pas attendre la pause"
                 >
-                  Agent replies{pending.length + (draft.trim() ? 1 : 0) > 0 ? ` (${pending.length + (draft.trim() ? 1 : 0)})` : ""} →
+                  Reply now →
                 </button>
               </div>
             </div>
