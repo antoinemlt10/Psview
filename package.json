@@ -9,6 +9,7 @@
     "lint": "next lint",
     "agent:try": "tsx scripts/try-agent.ts",
     "eval": "tsx eval/run-eval.ts",
+    "eval:opener": "tsx eval/opener-quality.ts",
     "gen:d": "tsx scripts/gen-d.ts"
   },
   "dependencies": {

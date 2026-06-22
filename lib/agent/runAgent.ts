@@ -269,6 +269,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       allowGreeting: !hasHistory && idx === 0,
       candidateName,
       isIntro,
+      isOpener: !hasHistory && idx === 0,
     });
     const vctx0 = vctxFor(0);
 
@@ -315,6 +316,22 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
         calls += rw.calls;
         if (rw.ok && rw.messages) messages = rw.messages;
         else errors.push("language: regeneration failed");
+      }
+
+      // 4a-opener) Boilerplate d'ouverture (description d'entreprise) → ne s'excise pas
+      //   (réparer = perdre le message) → régénération one-shot (hors budget de révision).
+      if (!hasHistory && messages[0]) {
+        const boiler = deterministicChecks(messages[0], vctxFor(0)).some((v) => v.startsWith("OPENER:"));
+        if (boiler) {
+          const rw = await runWrite({
+            ...writeArgs,
+            critique:
+              "L'OUVERTURE ne doit PAS commencer par une description d'entreprise (« X est une plateforme… », « X is a YC-backed platform that… », « Nous sommes une startup… »). Démarre par un HOOK ou un CONTRASTE concret ancré sur le rôle/candidat, puis amène l'entreprise naturellement (1 ligne max).",
+          });
+          calls += rw.calls;
+          if (rw.ok && rw.messages) messages = rw.messages;
+          else errors.push("opener: boilerplate regeneration failed");
+        }
       }
 
       // 4a) Réparation chirurgicale déterministe par message (jamais de re-roll→stub).

@@ -126,6 +126,24 @@ export function stripMarkdown(text: string): string {
 // Salutation en tête + nom optionnel. Capte « Bonjour Alex, » / « Hi Sam » / « Hello, ».
 const GREETING_OPENER =
   /^\s*(bonjour|bonsoir|salut|coucou|hello|hi|hey|dear)\b[\s,]*([\p{L}][\p{L}'-]*)?[\s,!.?-]*/iu;
+// Salutation NOMMÉE stricte : « Bonjour Alex, » / « Hi Sam, ». Le prénom doit être
+// Capitalisé ET séparé de la salutation par une ESPACE (pas une virgule), suivi d'une
+// virgule. Ainsi « Bonjour, la plupart des postes… » (virgule juste après la salutation)
+// n'extrait AUCUN nom — le 1er mot du corps n'est pas pris pour un prénom (et donc pas
+// supprimé par la réparation, ce qui corrompait « la plupart » → « plupart »).
+const GREETING_NAMED =
+  /^\s*(bonjour|bonsoir|salut|coucou|hello|hi|hey|dear)\s+([\p{L}][\p{L}'’-]+)\s*,/iu;
+
+// Extrait un prénom de salutation SEULEMENT s'il est réellement un prénom : capitalisé
+// (un mot de corps en minuscule comme « la » est rejeté) et non générique (« there », …).
+function namedGreeting(body: string): { hi: string; name: string; len: number } | null {
+  const m = body.match(GREETING_NAMED);
+  if (!m) return null;
+  const name = m[2];
+  if (!/^\p{Lu}/u.test(name)) return null;
+  if (GENERIC_AFTER_GREETING.has(name.toLowerCase())) return null;
+  return { hi: m[1], name, len: m[0].length };
+}
 // Mots qui suivent une salutation sans être un nom propre (à ne pas traiter en garbage).
 const GENERIC_AFTER_GREETING = new Set(["there", "all", "team", "everyone", "folks", "again"]);
 // Annonce explicite de non-présomption (à proscrire — la non-présomption est dans le TON).
@@ -142,6 +160,25 @@ export interface DeterministicCtx {
   allowGreeting: boolean; // salutation autorisée (= tout 1er message agent de la conv)
   candidateName?: string; // prénom réel du candidat (sinon : aucun nom)
   isIntro: boolean; // étape intro (contact froid)
+  isOpener: boolean; // tout 1er message d'une conversation vide (opener à froid)
+}
+
+// OPENER anti-boilerplate : un opener doit démarrer par un HOOK/CONTRASTE, pas par
+// une description d'entreprise (« X is a YC-backed platform that… », « X est une
+// plateforme… »). Deux signaux : (a) la 1re phrase est une auto-description
+// « [Sujet] is/est a/une … [nom-d'entreprise] », (b) marqueurs marketing/VC.
+const OPENER_DESC_RE =
+  /^(?:[A-Z][\w.&'-]*|we|our\s+\w+|i|nous|notre\s+\w+|on)\s+(?:is|are|'?s|am|est|sommes|sont)\s+(?:an?|the|une?|la|le|l['’]|des?)\b[^.?!\n]{0,90}\b(platforms?|compan(?:y|ies)|start-?ups?|tools?|solutions?|products?|providers?|apps?|services?|saas|agenc(?:y|ies)|firms?|studios?|labs?|software|marketplaces?|networks?|plateformes?|startups?|entreprises?|soci[ée]t[ée]s?|outils?|produits?|appli(?:cation)?s?|agences?|cabinets?)\b/i;
+const OPENER_MARKERS_RE =
+  /\b(yc-backed|y combinator|series\s+[a-e]\b|venture-backed|backed by|the leading|leading\s+(?:provider|platform|company)|world-class|#1|fast-growing|award-winning|next-generation|cutting-edge|financ[ée]e?s?\s+par|soutenue?s?\s+par|leader\s+(?:du|de\s+la|mondial)|n[°o]\s?1|en\s+forte\s+croissance|nouvelle\s+g[ée]n[ée]ration)\b/i;
+
+export function openerBoilerplateViolations(body: string): string[] {
+  const afterGreeting = body.replace(GREETING_OPENER, "").trimStart();
+  const firstSentence = afterGreeting.split(/(?<=[.?!])\s|\n/)[0] ?? afterGreeting;
+  if (OPENER_DESC_RE.test(firstSentence) || OPENER_MARKERS_RE.test(firstSentence)) {
+    return ["OPENER: starts with a company-description boilerplate instead of a hook/contrast."];
+  }
+  return [];
 }
 
 // CHECKS DURS EN CODE — rapides, sans LLM. Renvoie la liste des violations.
@@ -177,17 +214,16 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
   }
 
   // 3f) Salutation : seulement au tout 1er message agent ; jamais de nom inexistant.
-  const g = msg.body.match(GREETING_OPENER);
-  if (g) {
-    const name = g[2];
-    if (!ctx.allowGreeting) {
-      violations.push("Greeting although this is not the first message (no re-greeting).");
-    } else if (name && !GENERIC_AFTER_GREETING.has(name.toLowerCase())) {
-      if (!ctx.candidateName) {
-        violations.push(`Name in greeting although candidate is unknown: "${name}".`);
-      } else if (name.toLowerCase() !== ctx.candidateName.toLowerCase()) {
-        violations.push(`Incorrect greeting name: "${name}" (expected "${ctx.candidateName}").`);
-      }
+  if (!ctx.allowGreeting && GREETING_OPENER.test(msg.body)) {
+    violations.push("Greeting although this is not the first message (no re-greeting).");
+  }
+  // Nom de salutation : uniquement via la forme NOMMÉE stricte (« Bonjour Alex, »).
+  const ng = ctx.allowGreeting ? namedGreeting(msg.body) : null;
+  if (ng) {
+    if (!ctx.candidateName) {
+      violations.push(`Name in greeting although candidate is unknown: "${ng.name}".`);
+    } else if (ng.name.toLowerCase() !== ctx.candidateName.toLowerCase()) {
+      violations.push(`Incorrect greeting name: "${ng.name}" (expected "${ctx.candidateName}").`);
     }
   }
 
@@ -195,6 +231,12 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
   if (ctx.isIntro && ANNOUNCED_NONPRESUMPTION.test(haystack)) {
     violations.push("Non-presumption announced explicitly (must stay in the tone).");
   }
+
+  // 3h) OPENER : pas de boilerplate de description d'entreprise en ouverture.
+  if (ctx.isOpener) violations.push(...openerBoilerplateViolations(msg.body));
+
+  // 3i) Calque FR fréquent : « plupart » sans article (réparable déterministiquement).
+  if (ctx.outputLang === "fr") violations.push(...frenchCalqueViolations(haystack));
 
   // 3d) Gate de langue : message entièrement dans outputLang (corps + salutation).
   violations.push(...outputLanguageViolations(haystack, ctx.outputLang));
@@ -373,6 +415,22 @@ function tidy(s: string): string {
     .trim();
 }
 
+// Calque anglais→français le plus fréquent du writer : « plupart des … » au lieu de
+// « la plupart des … » (calque de "most ..."). Détection + réparation déterministes :
+// le proofread LLM le rate trop souvent, alors qu'il est trivial à corriger en code.
+const CALQUE_PLUPART_TEST = /(?<!la\s)\bplupart\b/i;
+export function frenchCalqueViolations(body: string): string[] {
+  if (CALQUE_PLUPART_TEST.test(body)) {
+    return ['Calque FR: "plupart" sans article — doit être "la plupart".'];
+  }
+  return [];
+}
+export function fixFrenchCalques(body: string): string {
+  return body.replace(/(?<!la\s)\b([Pp])lupart\b/gi, (_m, p1: string) =>
+    p1 === "P" ? "La plupart" : "la plupart",
+  );
+}
+
 export function repairMessage(msg: NextMessage, ctx: DeterministicCtx): NextMessage {
   let body = msg.body;
   let subject = msg.subject;
@@ -380,6 +438,12 @@ export function repairMessage(msg: NextMessage, ctx: DeterministicCtx): NextMess
   // 0) Markdown → texte brut (strip déterministe, structure préservée).
   if (hasMarkdown(body)) body = stripMarkdown(body);
   if (subject && hasMarkdown(subject)) subject = stripMarkdown(subject);
+
+  // 0b) Calques FR fréquents (« plupart » → « la plupart ») — réparation directe.
+  if (ctx.outputLang === "fr") {
+    body = fixFrenchCalques(body);
+    if (subject) subject = fixFrenchCalques(subject);
+  }
 
   const dropSentence = (pred: (s: string) => boolean) => {
     body = splitSentences(body)
@@ -452,22 +516,22 @@ export function repairMessage(msg: NextMessage, ctx: DeterministicCtx): NextMess
   }
   // 6d) Politique de salutation : pas de greeting après le 1er message ; pas de nom
   //     inexistant/incorrect (candidat inconnu → aucun nom).
-  const gm = body.match(GREETING_OPENER);
-  if (gm) {
-    if (!ctx.allowGreeting) {
+  if (!ctx.allowGreeting) {
+    const gm = body.match(GREETING_OPENER);
+    if (gm) {
       // Re-greeting → on retire la salutation, on garde le reste du message.
       body = body.slice(gm[0].length).trimStart();
       body = body.charAt(0).toUpperCase() + body.slice(1);
-    } else {
-      const name = gm[2];
-      const generic = name && GENERIC_AFTER_GREETING.has(name.toLowerCase());
-      if (name && !generic) {
-        const hi = gm[1];
-        if (!ctx.candidateName) {
-          body = `${hi}, ` + body.slice(gm[0].length).trimStart();
-        } else if (name.toLowerCase() !== ctx.candidateName.toLowerCase()) {
-          body = `${hi} ${ctx.candidateName}, ` + body.slice(gm[0].length).trimStart();
-        }
+    }
+  } else {
+    // Nom de salutation : SEULEMENT la forme nommée stricte « Bonjour Alex, ». Ainsi
+    // « Bonjour, la plupart… » n'est PAS touché (« la » n'est pas un prénom).
+    const ng = namedGreeting(body);
+    if (ng) {
+      if (!ctx.candidateName) {
+        body = `${ng.hi}, ` + body.slice(ng.len).trimStart();
+      } else if (ng.name.toLowerCase() !== ctx.candidateName.toLowerCase()) {
+        body = `${ng.hi} ${ctx.candidateName}, ` + body.slice(ng.len).trimStart();
       }
     }
   }
