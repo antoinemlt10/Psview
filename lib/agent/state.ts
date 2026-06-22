@@ -30,9 +30,9 @@ export function defaultPlan(intent: string): Plan {
     stages: [
       { stage: "intro", objective: "Establish contact and context." },
       { stage: "value_pitch", objective: "Show the role's value, anchored on the candidate." },
-      { stage: "handle_objection", objective: "Address reluctance and objections without re-pitching." },
+      { stage: "handle_objection", objective: "Address concerns and objections without re-pitching." },
       { stage: "propose_call", objective: "Propose a call once interest is sufficient." },
-      { stage: "confirm_logistics", objective: "Settle the logistics of the call." },
+      { stage: "confirm_logistics", objective: "Lock in the call logistics." },
       { stage: "reengage", objective: "Re-engage tactfully if the candidate cools off." },
     ],
   };

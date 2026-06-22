@@ -101,7 +101,11 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     let agentMemory: AgentMemory = carry
       ? structuredClone(prior!.agentMemory)
       : emptyAgentMemory();
-    const plan: Plan = carry ? prior!.plan : defaultPlan(input.intent);
+    // On reporte l'étape courante mais on RAFRAÎCHIT les objectifs depuis le code
+    // (sinon un priorState persisté garde d'anciens libellés, ex. français).
+    const plan: Plan = carry
+      ? { ...defaultPlan(input.intent), currentStage: prior!.plan.currentStage }
+      : defaultPlan(input.intent);
     const counters = carry
       ? { ...prior!.counters }
       : { messagesSent: 0, revisions: 0, objectionsRaised: 0, objectionsResolved: 0 };
@@ -256,7 +260,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       // 4a-langue) Une FUITE de langue ne s'excise pas (il faut traduire) →
       //   régénération one-shot du lot (hors budget de révision).
       const anyLang = messages.some((m, i) =>
-        deterministicChecks(m, vctxFor(i)).some((v) => v.startsWith("LANGUE")),
+        deterministicChecks(m, vctxFor(i)).some((v) => v.startsWith("LANGUAGE")),
       );
       if (anyLang && outputLang) {
         const langName = outputLang === "fr" ? "français" : "anglais";

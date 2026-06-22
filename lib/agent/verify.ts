@@ -76,11 +76,11 @@ export function outputLanguageViolations(haystack: string, target: "fr" | "en" |
   const firstLine = haystack.trim().split(/\n/)[0] ?? "";
 
   if (target === "en") {
-    if (FR_GREETING.test(firstLine)) v.push("LANGUE : salutation française dans un message anglais.");
-    if (frHits >= 2) v.push(`LANGUE : français détecté (${frHits} marqueurs) — le message doit être en anglais.`);
+    if (FR_GREETING.test(firstLine)) v.push("LANGUAGE: French greeting in an English message.");
+    if (frHits >= 2) v.push(`LANGUAGE: French detected (${frHits} markers) — the message must be in English.`);
   } else {
-    if (EN_GREETING.test(firstLine)) v.push("LANGUE : salutation anglaise dans un message français.");
-    if (enHits >= 3) v.push(`LANGUE : anglais détecté (${enHits} marqueurs) — le message doit être en français.`);
+    if (EN_GREETING.test(firstLine)) v.push("LANGUAGE: English greeting in a French message.");
+    if (enHits >= 3) v.push(`LANGUAGE: English detected (${enHits} markers) — the message must be in French.`);
   }
   return v;
 }
@@ -164,28 +164,28 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
 
   // 1) Termes proscrits (dontSay).
   for (const term of ctx.forbidden.dontSay) {
-    if (containsTerm(lower, term)) violations.push(`Terme proscrit présent : « ${term} ».`);
+    if (containsTerm(lower, term)) violations.push(`Proscribed term present: "${term}".`);
   }
 
   // 2) Politique emoji.
   if (ctx.voiceProfile.emojiUse === "none" && hasEmoji(haystack)) {
-    violations.push("Emoji présent alors que la politique est 'none'.");
+    violations.push("Emoji present while policy is 'none'.");
   }
 
   // 3) Longueur cohérente avec le canal (limite DURE passée par l'orchestrateur).
   if (msg.body.length > ctx.bodyLimit) {
-    violations.push(`Body trop long (${msg.body.length} > ${ctx.bodyLimit} pour ${ctx.channelHint}).`);
+    violations.push(`Body too long (${msg.body.length} > ${ctx.bodyLimit} for ${ctx.channelHint}).`);
   }
-  if (msg.body.trim().length === 0) violations.push("Body vide.");
+  if (msg.body.trim().length === 0) violations.push("Empty body.");
 
   // 3b) Placeholders entre crochets interdits ([First Name], [Your Name], …).
   const bracket = haystack.match(/\[[^\]\n]{1,40}\]/);
-  if (bracket) violations.push(`Placeholder entre crochets interdit : « ${bracket[0]} ».`);
+  if (bracket) violations.push(`Bracketed placeholder forbidden: "${bracket[0]}".`);
 
   // 3c) Stage-gate du scheduling : logistique CONCRÈTE interdite hors call-stage.
   //     La SONDE d'intérêt (« open to a short call? ») reste autorisée (pont).
   if (!ctx.schedulingAllowed && hasConcreteScheduling(haystack)) {
-    violations.push("Logistique d'appel concrète hors-stage (horaire/jour/créneau non autorisé ce tour).");
+    violations.push("Concrete call logistics out-of-stage (time/day/slot not allowed this turn).");
   }
 
   // 3f) Salutation : seulement au tout 1er message agent ; jamais de nom inexistant.
@@ -193,30 +193,30 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
   if (g) {
     const name = g[2];
     if (!ctx.allowGreeting) {
-      violations.push("Salutation alors que ce n'est pas le 1er message (pas de re-greeting).");
+      violations.push("Greeting although this is not the first message (no re-greeting).");
     } else if (name && !GENERIC_AFTER_GREETING.has(name.toLowerCase())) {
       if (!ctx.candidateName) {
-        violations.push(`Nom dans la salutation alors que le candidat est inconnu : « ${name} ».`);
+        violations.push(`Name in greeting although candidate is unknown: "${name}".`);
       } else if (name.toLowerCase() !== ctx.candidateName.toLowerCase()) {
-        violations.push(`Nom de salutation incorrect : « ${name} » (attendu « ${ctx.candidateName} »).`);
+        violations.push(`Incorrect greeting name: "${name}" (expected "${ctx.candidateName}").`);
       }
     }
   }
 
   // 3g) Non-présomption ANNONCÉE (doit être dans le ton, pas déclarée).
   if (ctx.isIntro && ANNOUNCED_NONPRESUMPTION.test(haystack)) {
-    violations.push("Non-présomption annoncée explicitement (doit rester dans le ton).");
+    violations.push("Non-presumption announced explicitly (must stay in the tone).");
   }
 
   // 3d) Gate de langue : message entièrement dans outputLang (corps + salutation).
   violations.push(...outputLanguageViolations(haystack, ctx.outputLang));
 
   // 3e) Markdown interdit (canaux texte brut).
-  if (hasMarkdown(haystack)) violations.push("Markdown présent (canal en texte brut).");
+  if (hasMarkdown(haystack)) violations.push("Markdown present (plain-text channel).");
 
   // 4) Mémoire : reproposition d'un sujet banni (rejet/écarté actif).
   for (const topic of ctx.forbidden.bannedTopics) {
-    if (containsTerm(lower, topic)) violations.push(`Repropose un sujet banni : « ${topic} ».`);
+    if (containsTerm(lower, topic)) violations.push(`Re-proposes a banned topic: "${topic}".`);
   }
 
   // 5) Anti-répétition : question déjà posée re-posée verbatim.
@@ -224,7 +224,7 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
   //     — laissées au writer comme garde-fou + au VERIFY LLM sémantique.)
   for (const q of ctx.forbidden.questionsAsked) {
     if (q && lower.includes(q.toLowerCase())) {
-      violations.push(`Re-pose une question déjà posée : « ${q} ».`);
+      violations.push(`Re-asks an already-asked question: "${q}".`);
     }
   }
 
@@ -232,13 +232,13 @@ export function deterministicChecks(msg: NextMessage, ctx: DeterministicCtx): st
   if (ctx.voiceProfile.formality === "casual") {
     const opening = msg.body.trimStart();
     if (/^(yo\b|hey\s+yo\b|wesh\b|coucou\b)/i.test(opening)) {
-      violations.push("Ouverture trop familière/ado en casual (Yo/Hey yo/Wesh/Coucou).");
+      violations.push("Opening too familiar/teen in casual (Yo/Hey yo/Wesh/Coucou).");
     }
     for (const slang of ["ouais", "grave", "chiant", "trop stylé"]) {
-      if (containsTerm(lower, slang)) violations.push(`Argot proscrit en casual : « ${slang} ».`);
+      if (containsTerm(lower, slang)) violations.push(`Proscribed slang in casual: "${slang}".`);
     }
     if (haystack.includes("!!!") || haystack.includes("???")) {
-      violations.push("Ponctuation excessive (!!! / ???) — pas en casual propre.");
+      violations.push("Excessive punctuation (!!! / ???) — not in clean casual.");
     }
   }
 
@@ -295,44 +295,45 @@ export async function llmVerify(
   // (C) cohérence + (D) grammaire sont toujours pertinentes → on appelle toujours.
 
   const system = [
-    "Tu es un vérificateur strict du message FINAL d'un agent de recrutement.",
-    "(A) MÉMOIRE : détecte toute reproposition (même de loin) d'un sujet banni, re-demande d'une",
-    "info déjà connue, re-soulèvement d'un sujet écarté, ou répétition d'un argument déjà servi.",
-    "(B) ADHÉRENCE : le message exécute-t-il CHAQUE point de À FAIRE ? Évite-t-il TOUT À NE PAS FAIRE",
-    "et toute répétition listée ? Une divergence (point À FAIRE manquant, ou À NE PAS FAIRE présent,",
-    "ex: re-décrit le rôle, re-présente des excuses, pousse un appel) = violation.",
-    "(C) COHÉRENCE / CLARTÉ (plancher que la concision ne viole jamais) : chaque phrase doit être",
-    "auto-suffisante. Signale tout pronom ou sujet IMPLICITE sans référent énoncé (ex: « It's built",
-    "in. » sans dire de QUOI on parle ; « Not a stretch, not occasional. » sans sujet), toute phrase",
-    "sur-compressée incompréhensible hors contexte, toute référence à un non-dit. = violation.",
+    "You are a strict verifier of a recruiting agent's FINAL message. Reply via the tool;",
+    "write every violation string in English.",
+    "(A) MEMORY: detect any re-proposal (even loosely) of a banned topic, re-asking an",
+    "already-known fact, re-raising a dismissed topic, or repeating an argument already made.",
+    "(B) ADHERENCE: does the message execute EVERY mustDo item? Does it avoid ALL mustNotDo",
+    "and every listed repetition? A divergence (missing mustDo, or a mustNotDo present, e.g.",
+    "re-describes the role, apologizes again, pushes a call) = violation.",
+    "(C) COHERENCE / CLARITY (a floor concision never violates): each sentence must be",
+    'self-sufficient. Flag any IMPLICIT pronoun/subject with no stated referent (e.g. "It\'s built',
+    'in." without saying of WHAT; "Not a stretch, not occasional." with no subject), any',
+    "over-compressed sentence unintelligible out of context, any reference to something unstated.",
     opts.language
-      ? `(D) GRAMMAIRE / LANGUE NATIVE : la prose doit être irréprochable et NATIVE en ${opts.language}. ` +
-        "Signale tout calque d'une autre langue : article manquant (« plupart des… » au lieu de " +
-        "« la plupart des… »), accord/conjugaison fautifs, ordre des mots non natif, tournure traduite. = violation."
+      ? `(D) GRAMMAR / NATIVE LANGUAGE: the prose must be flawless and NATIVE in ${opts.language}. ` +
+        'Flag any calque from another language: missing article ("plupart des…" instead of ' +
+        '"la plupart des…"), wrong agreement/conjugation, non-native word order, translated phrasing. = violation.'
       : "",
-    "Si tout est respecté : pass=true. Sinon pass=false + violations précises. Réponds via le tool.",
+    "If everything is fine: pass=true. Otherwise pass=false + precise violations.",
   ]
     .filter(Boolean)
     .join(" ");
 
   const user = [
-    "MESSAGE FINAL :",
-    `subject: ${msg.subject ?? "(aucun)"}`,
+    "FINAL MESSAGE:",
+    `subject: ${msg.subject ?? "(none)"}`,
     `body: ${msg.body}`,
     "",
-    "INTERDITS MÉMOIRE :",
-    `sujets bannis: ${JSON.stringify(forbidden.bannedTopics)}`,
-    `infos connues (ne pas re-demander): ${JSON.stringify(forbidden.knownFacts)}`,
-    `arguments déjà servis: ${JSON.stringify(forbidden.pointsMade)}`,
-    `questions déjà posées: ${JSON.stringify(forbidden.questionsAsked)}`,
+    "MEMORY FORBIDDEN:",
+    `banned topics: ${JSON.stringify(forbidden.bannedTopics)}`,
+    `known facts (do not re-ask): ${JSON.stringify(forbidden.knownFacts)}`,
+    `arguments already made: ${JSON.stringify(forbidden.pointsMade)}`,
+    `questions already asked: ${JSON.stringify(forbidden.questionsAsked)}`,
     ...(adherence
       ? [
           "",
-          "DÉCISION À AVOIR EXÉCUTÉE :",
+          "DECISION TO HAVE EXECUTED:",
           adherence.decision,
-          `À FAIRE: ${JSON.stringify(adherence.mustDo)}`,
-          `À NE PAS FAIRE: ${JSON.stringify(adherence.mustNotDo)}`,
-          `RÉPÉTITIONS À ÉVITER: ${JSON.stringify(adherence.avoidedRepetition)}`,
+          `MUST DO: ${JSON.stringify(adherence.mustDo)}`,
+          `MUST NOT DO: ${JSON.stringify(adherence.mustNotDo)}`,
+          `REPETITIONS TO AVOID: ${JSON.stringify(adherence.avoidedRepetition)}`,
         ]
       : []),
   ].join("\n");
