@@ -106,6 +106,21 @@ export default function TestPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const openedRef = useRef(false);
+  // Requête agent en cours : controller pour l'annuler + id pour ignorer une
+  // réponse périmée (l'utilisateur s'est remis à taper avant qu'elle n'arrive).
+  const abortRef = useRef<AbortController | null>(null);
+  const reqIdRef = useRef(0);
+
+  // Annule la réponse de l'agent en cours (l'utilisateur recommence à taper /
+  // ajoute un message) → on attend la prochaine pause pour répondre au LOT complet.
+  const cancelInFlight = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    reqIdRef.current++; // invalide toute réponse déjà partie
+    setLoading(false);
+  }, []);
 
   // Core call to the (stateless) agent endpoint.
   const runAgent = useCallback(
@@ -115,6 +130,9 @@ export default function TestPage() {
       currentIntent: string,
       incomingCandidateReply?: string,
     ) => {
+      const myId = ++reqIdRef.current;
+      const controller = new AbortController();
+      abortRef.current = controller;
       setLoading(true);
       setError("");
       try {
@@ -130,12 +148,14 @@ export default function TestPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(input),
+          signal: controller.signal,
         });
         if (!res.ok) {
           const j = (await res.json().catch(() => ({}))) as { error?: string };
           throw new Error(j.error || `Agent returned ${res.status}`);
         }
         const out = (await res.json()) as AgentOutput;
+        if (myId !== reqIdRef.current) return; // réponse périmée → on ignore
         // L'agent peut renvoyer plusieurs messages (burst) → une bulle chacun.
         const agentMsgs: Message[] = out.nextMessages.map((m) => ({
           role: "agent",
@@ -144,15 +164,22 @@ export default function TestPage() {
           subject: m.subject,
           ts: Date.now(),
         }));
-        const next = [...conversation, ...agentMsgs];
-        setMessages(next);
-        saveConversation(next);
+        setMessages((prev) => {
+          const next = [...prev, ...agentMsgs];
+          saveConversation(next);
+          return next;
+        });
         if (out.state) saveAgentState(out.state);
         setOutput(out);
+        setPending([]); // lot traité → file vidée
       } catch (e) {
+        if (controller.signal.aborted || myId !== reqIdRef.current) return; // annulé → silencieux
         setError(e instanceof Error ? e.message : "Something went wrong.");
       } finally {
-        setLoading(false);
+        if (myId === reqIdRef.current) {
+          abortRef.current = null;
+          setLoading(false);
+        }
       }
     },
     [],
@@ -176,11 +203,12 @@ export default function TestPage() {
     }
   }, [runAgent]);
 
-  // Met en file un message candidat SANS déclencher l'agent (multi-messages entrée).
-  // Mises à jour FONCTIONNELLES → des Entrées rapides ne perdent aucun message.
+  // Met en file un message candidat (bulle). Si l'agent réfléchissait déjà, on
+  // SUSPEND sa réponse (un nouveau message arrive) → il attendra la prochaine pause.
   const queueReply = () => {
     const reply = draft.trim();
-    if (!reply || !ctx || loading) return;
+    if (!reply || !ctx) return;
+    if (loading) cancelInFlight();
     const candidateMsg: Message = { role: "candidate", content: reply, ts: Date.now() };
     setMessages((prev) => {
       const next = [...prev, candidateMsg];
@@ -192,9 +220,10 @@ export default function TestPage() {
   };
 
   // Déclenche l'agent : REASON traite le LOT de messages candidat non-répondus.
+  // NB : `pending` n'est PAS vidé ici — runAgent le vide seulement à la livraison
+  // (si la réponse est suspendue, le lot reste intact pour la prochaine tentative).
   const requestAgentReply = () => {
     if (!ctx || loading) return;
-    // un éventuel brouillon non encore mis en file est inclus
     const draftText = draft.trim();
     let convo = messages;
     let batch = pending;
@@ -202,13 +231,16 @@ export default function TestPage() {
       const candidateMsg: Message = { role: "candidate", content: draftText, ts: Date.now() };
       convo = [...messages, candidateMsg];
       batch = [...pending, draftText];
-      setMessages(convo);
-      saveConversation(convo);
+      setMessages((prev) => {
+        const next = [...prev, candidateMsg];
+        saveConversation(next);
+        return next;
+      });
+      setPending(batch);
       setDraft("");
     }
-    setPending([]);
-    const incoming = batch.length ? batch.join("\n\n") : undefined;
-    void runAgent(ctx, convo, intent, incoming);
+    if (!batch.length) return;
+    void runAgent(ctx, convo, intent, batch.join("\n\n"));
   };
 
   // L'agent répond TOUT SEUL quand le candidat arrête de taper (debounce).
@@ -355,7 +387,12 @@ export default function TestPage() {
             )}
             <textarea
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                // Si l'agent réfléchissait déjà, recommencer à taper SUSPEND sa
+                // réponse → il attend la prochaine pause (au cas où un 2e message vient).
+                if (loading) cancelInFlight();
+              }}
               onKeyDown={(e) => {
                 // Enter = envoyer un message candidat (bulle) ; Shift+Enter = saut de ligne ;
                 // ⌘/Ctrl+Enter = envoyer puis déclencher l'agent.
