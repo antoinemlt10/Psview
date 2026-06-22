@@ -9,14 +9,14 @@ export const PSVIEW_SAMPLE: CompanyContext = {
     oneLiner:
       "we build autonomous AI agents that engage candidates on a company's behalf — agents that reason and act, not prompt wrappers",
     industry: "AI / recruiting infrastructure",
-    sizeStage: "seed-stage startup (Toulouse, France)",
+    sizeStage: "seed-stage startup (San Francisco)",
     website: "https://psview.ai",
   },
   culture: {
     values: ["Ownership", "Ship fast", "Candor"],
     cultureNotes:
       "Small founding team. We trust people to own outcomes end-to-end, ship in days not quarters, and tell each other the truth even when it stings. Product sense matters as much as engineering.",
-    workStyle: "High-autonomy, low-process, in-person in Toulouse with async depth work",
+    workStyle: "High-autonomy, low-process, in-person in San Francisco with async depth work",
   },
   hiring: {
     roles: [

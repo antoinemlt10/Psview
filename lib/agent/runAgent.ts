@@ -117,6 +117,8 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       const p = await getPersonality(ctx, personaKey);
       calls += p.calls;
       personality = p.personality;
+      // Échec de synthèse persona = autrement silencieux → on l'expose dans meta.
+      if (!p.ok) errors.push(`persona: ${p.error ?? "synthesis failed"} → fallback persona`);
     }
 
     // ── État de départ : report depuis priorState s'il existe ──
