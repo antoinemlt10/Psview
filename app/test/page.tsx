@@ -15,6 +15,11 @@ import {
 } from "@/lib/storage";
 import type { AgentInput, AgentOutput, CompanyContext, Message } from "@/lib/types";
 
+// View model for the chat bubbles: the shared-contract Message (role/content/ts)
+// plus display-only fields. A DisplayMessage[] is structurally a Message[] so it
+// can be passed straight to the engine as `conversation`.
+type DisplayMessage = Message & { channel?: AgentOutput["nextMessages"][number]["channelHint"]; subject?: string };
+
 const DEFAULT_INTENT =
   "engage this candidate for the open role and book a call";
 
@@ -55,7 +60,7 @@ function PersonaCard({ p }: { p: AgentOutput["personality"] }) {
   );
 }
 
-function Bubble({ m }: { m: Message }) {
+function Bubble({ m }: { m: DisplayMessage }) {
   const isAgent = m.role === "agent";
   return (
     <div className={`flex ${isAgent ? "justify-start" : "justify-end"}`}>
@@ -99,7 +104,7 @@ export default function TestPage() {
   const [ctx, setCtx] = useState<CompanyContext | null>(null);
   const [ready, setReady] = useState(false);
   const [intent, setIntent] = useState(DEFAULT_INTENT);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [output, setOutput] = useState<AgentOutput | null>(null);
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<string[]>([]); // messages candidat en file
@@ -126,7 +131,7 @@ export default function TestPage() {
   const runAgent = useCallback(
     async (
       context: CompanyContext,
-      conversation: Message[],
+      conversation: DisplayMessage[],
       currentIntent: string,
       incomingCandidateReply?: string,
     ) => {
@@ -157,7 +162,7 @@ export default function TestPage() {
         const out = (await res.json()) as AgentOutput;
         if (myId !== reqIdRef.current) return; // réponse périmée → on ignore
         // L'agent peut renvoyer plusieurs messages (burst) → une bulle chacun.
-        const agentMsgs: Message[] = out.nextMessages.map((m) => ({
+        const agentMsgs: DisplayMessage[] = out.nextMessages.map((m) => ({
           role: "agent",
           content: m.body,
           channel: m.channelHint,
@@ -209,7 +214,7 @@ export default function TestPage() {
     const reply = draft.trim();
     if (!reply || !ctx) return;
     if (loading) cancelInFlight();
-    const candidateMsg: Message = { role: "candidate", content: reply, ts: Date.now() };
+    const candidateMsg: DisplayMessage = { role: "candidate", content: reply, ts: Date.now() };
     setMessages((prev) => {
       const next = [...prev, candidateMsg];
       saveConversation(next);
@@ -228,7 +233,7 @@ export default function TestPage() {
     let convo = messages;
     let batch = pending;
     if (draftText) {
-      const candidateMsg: Message = { role: "candidate", content: draftText, ts: Date.now() };
+      const candidateMsg: DisplayMessage = { role: "candidate", content: draftText, ts: Date.now() };
       convo = [...messages, candidateMsg];
       batch = [...pending, draftText];
       setMessages((prev) => {

@@ -1,0 +1,42 @@
+{
+  "intent": "Engager un·e ingénieur·e senior pour un poste de simulation deep-tech.",
+  "candidate": {
+    "name": "Dr. Lefèvre",
+    "headline": "PhD physique des plasmas, 7 ans en calcul numérique",
+    "notes": "Auteur·e de plusieurs papiers sur les solveurs MHD."
+  },
+  "conversation": [],
+  "incomingCandidateReply": "",
+  "companyContext": {
+    "identity": {
+      "name": "Heliogen Labs",
+      "oneLiner": "On reconstruit la simulation de plasma pour la fusion.",
+      "industry": "Deep-tech / énergie",
+      "sizeStage": "Series A, 35 personnes",
+      "website": "https://heliogen.labs"
+    },
+    "culture": {
+      "values": ["rigueur scientifique", "ownership", "long terme"],
+      "cultureNotes": "Équipe de PhD, revue par les pairs, peu de réunions.",
+      "workStyle": "Async-first, blocs de deep work."
+    },
+    "hiring": {
+      "roles": [
+        {
+          "title": "Senior Simulation Engineer",
+          "seniority": "senior",
+          "whatTheyllDo": "Concevoir le solveur MHD temps réel du cœur produit.",
+          "mustHaveSkills": ["C++", "calcul numérique", "physique des plasmas"]
+        }
+      ],
+      "idealCandidateTraits": ["autonome", "publie", "aime les problèmes durs"]
+    },
+    "voice": {
+      "tone": "sérieux, précis, respectueux",
+      "formality": "formal",
+      "language": "français",
+      "emojiUse": "none",
+      "dontSay": ["rockstar", "ninja", "disruptif"]
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "intent": "Engager un·e ingénieur·e senior pour un poste de simulation deep-tech.",
+  "candidate": {
+    "name": "Sam",
+    "headline": "Full-stack, adore les side-projects funky"
+  },
+  "conversation": [],
+  "incomingCandidateReply": "",
+  "companyContext": {
+    "identity": {
+      "name": "Snackr",
+      "oneLiner": "L'appli qui transforme tes envies de grignotage en jeu entre potes.",
+      "industry": "Conso / social mobile",
+      "sizeStage": "Seed, 8 personnes",
+      "website": "https://snackr.fun"
+    },
+    "culture": {
+      "values": ["fun", "vitesse", "obsession utilisateur"],
+      "cultureNotes": "On shippe vite, on rigole beaucoup, memes dans le Slack.",
+      "workStyle": "In-person, énergie de garage."
+    },
+    "hiring": {
+      "roles": [
+        {
+          "title": "Senior Product Engineer",
+          "seniority": "senior",
+          "whatTheyllDo": "Shipper des features sociales virales de bout en bout.",
+          "mustHaveSkills": ["React Native", "Node", "produit"]
+        }
+      ],
+      "idealCandidateTraits": ["créatif", "rapide", "fan de produit grand public"]
+    },
+    "voice": {
+      "tone": "fun, chaleureux, complice",
+      "formality": "casual",
+      "language": "français",
+      "emojiUse": "liberal",
+      "dontSay": ["synergie", "corporate", "process lourd"]
+    }
+  }
+}

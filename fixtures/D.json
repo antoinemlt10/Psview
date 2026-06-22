@@ -1,0 +1,176 @@
+{
+  "intent": "Recruter un·e ingénieur·e senior, idéalement backend, pour le moteur de paiement.",
+  "companyContext": {
+    "identity": {
+      "name": "Forgepath",
+      "oneLiner": "Infrastructure de paiement pour les marketplaces B2B.",
+      "industry": "Fintech / infrastructure",
+      "sizeStage": "Series A, 50 personnes",
+      "website": "https://forgepath.io"
+    },
+    "culture": {
+      "values": [
+        "fiabilité",
+        "clarté",
+        "autonomie"
+      ],
+      "cultureNotes": "Petites équipes, forte ownership, post-mortems sans blâme.",
+      "workStyle": "Hybride, 2 jours au bureau."
+    },
+    "hiring": {
+      "roles": [
+        {
+          "title": "Senior Backend Engineer",
+          "seniority": "senior",
+          "whatTheyllDo": "Construire le moteur de règlement et les APIs de paiement.",
+          "mustHaveSkills": [
+            "Go",
+            "systèmes distribués",
+            "bases de données"
+          ]
+        },
+        {
+          "title": "Product Engineer",
+          "seniority": "senior",
+          "whatTheyllDo": "Travailler à la frontière produit/backend sur les flux marchands.",
+          "mustHaveSkills": [
+            "TypeScript",
+            "produit",
+            "APIs"
+          ]
+        }
+      ],
+      "idealCandidateTraits": [
+        "rigoureux",
+        "orienté impact",
+        "bon communicant"
+      ]
+    },
+    "voice": {
+      "tone": "direct, clair, sans bullshit",
+      "formality": "neutral",
+      "language": "français",
+      "emojiUse": "sparing",
+      "dontSay": [
+        "disruptif",
+        "rockstar"
+      ]
+    }
+  },
+  "candidate": {
+    "name": "Alex",
+    "headline": "Ingénieur·e senior, profil produit/backend"
+  },
+  "conversation": [
+    {
+      "role": "agent",
+      "content": "Bonjour Alex, je vous contacte de la part de Forgepath. On construit l'infra de paiement pour les marketplaces B2B et on cherche un profil senior pour le moteur de règlement."
+    },
+    {
+      "role": "candidate",
+      "content": "Franchement le backend pur très peu pour moi, et votre message est plein de jargon technique."
+    },
+    {
+      "role": "agent",
+      "content": "Compris, merci de la franchise. Qu'est-ce qui rendrait un prochain rôle intéressant pour vous ?"
+    }
+  ],
+  "incomingCandidateReply": "En fait, à la réflexion, le backend pourrait m'intéresser si je peux aussi toucher au produit et aux flux marchands.",
+  "priorState": {
+    "personaKey": "persona_cd7076b7",
+    "personality": {
+      "persona": "Un·e chargé·e de recrutement de Forgepath (Fintech / infrastructure), qui parle au nom de l'équipe avec un ton direct, clair, sans bullshit.",
+      "traits": [
+        "ancré sur le contexte",
+        "neutral",
+        "direct, clair, sans bullshit"
+      ],
+      "voiceProfile": {
+        "formality": "neutral",
+        "emojiUse": "sparing",
+        "language": "français",
+        "styleAdjustments": []
+      },
+      "rationale": "Persona de repli dérivé directement de l'identité et de la voix de Forgepath."
+    },
+    "plan": {
+      "goal": "Recruter un·e ingénieur·e senior, idéalement backend, pour le moteur de paiement.",
+      "currentStage": "handle_objection",
+      "stages": [
+        {
+          "stage": "intro",
+          "objective": "Établir le contact et le contexte."
+        },
+        {
+          "stage": "value_pitch",
+          "objective": "Montrer la valeur du rôle, ancrée sur le candidat."
+        },
+        {
+          "stage": "handle_objection",
+          "objective": "Adresser réticences et objections sans re-pitcher."
+        },
+        {
+          "stage": "propose_call",
+          "objective": "Proposer un échange quand l'intérêt est suffisant."
+        },
+        {
+          "stage": "confirm_logistics",
+          "objective": "Caler la logistique de l'échange."
+        },
+        {
+          "stage": "reengage",
+          "objective": "Relancer avec tact si le candidat se refroidit."
+        }
+      ]
+    },
+    "candidateMemory": {
+      "rejections": [
+        {
+          "id": "rej_t2_0",
+          "content": "le rôle backend (ne veut pas de poste purement backend)",
+          "turn": 2,
+          "status": "active",
+          "strength": 1
+        }
+      ],
+      "constraints": [],
+      "objections": [],
+      "facts": [
+        {
+          "id": "fac_t1_0",
+          "content": "le candidat travaille surtout en TypeScript aujourd'hui",
+          "turn": 1,
+          "status": "active",
+          "strength": 1
+        }
+      ],
+      "dismissedTopics": [],
+      "styleFeedback": [
+        {
+          "id": "sty_t2_1",
+          "content": "éviter le jargon technique, rester simple et concret",
+          "turn": 2,
+          "status": "active",
+          "strength": 1
+        }
+      ],
+      "temperature": "lukewarm"
+    },
+    "agentMemory": {
+      "pointsMade": [
+        "Présenter l'impact du moteur de règlement chez Forgepath",
+        "Mettre en avant l'autonomie et les post-mortems sans blâme"
+      ],
+      "questionsAsked": [
+        "Qu'est-ce qui rendrait un prochain rôle intéressant pour vous ?"
+      ],
+      "proposalsMade": []
+    },
+    "counters": {
+      "messagesSent": 3,
+      "revisions": 0,
+      "objectionsRaised": 1,
+      "objectionsResolved": 0
+    }
+  }
+}

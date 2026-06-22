@@ -1,4 +1,4 @@
-import type { CompanyContext, Message } from "./types";
+import type { AgentState, CompanyContext, Message } from "./types";
 
 // Client-side persistence. This is a real deployed app (not a sandbox), so
 // localStorage is a legitimate store for the company context + conversation.
@@ -38,9 +38,11 @@ export const loadIntent = () => read<string>(INTENT_KEY);
 export const saveIntent = (intent: string) => write(INTENT_KEY, intent);
 
 // Rich engine state (memory/plan/counters) — round-tripped as priorState so the
-// feedback loop persists across turns. Opaque blob from the UI's point of view.
-export const loadAgentState = () => read<Record<string, unknown>>(STATE_KEY);
-export const saveAgentState = (state: Record<string, unknown>) => write(STATE_KEY, state);
+// feedback loop persists across turns. Typed as AgentState (the shared contract);
+// the engine still validates its shape at runtime (isValidPriorState) since this
+// blob comes from localStorage and could be stale.
+export const loadAgentState = () => read<AgentState>(STATE_KEY);
+export const saveAgentState = (state: AgentState) => write(STATE_KEY, state);
 
 export function clearConversation(): void {
   if (typeof window === "undefined") return;

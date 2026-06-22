@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import type { AgentInput } from "@/lib/types";
-import { runAgent } from "@/lib/agent";
+import type { AgentInput } from "@/lib/agent/types";
+import { runAgent } from "@/lib/agent/runAgent";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE INTEGRATION SEAM — now wired to the REAL reasoning engine (lib/agent/*).

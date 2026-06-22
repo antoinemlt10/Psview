@@ -1,17 +1,27 @@
 // ── Le contrat du moteur d'agent PSVIEW ──
-// Types partagés avec l'UI finale (formulaire + test area) et la route /api/agent.
-// Ne pas casser ce contrat : l'UI le consomme tel quel.
+// SOURCE UNIQUE du contrat partagé entre le moteur (lib/agent/*), la route /api/agent
+// et l'UI (qui le ré-exporte via lib/types.ts). Ne pas dupliquer ailleurs.
 
 export type Formality = "casual" | "neutral" | "formal";
 export type EmojiUse = "none" | "sparing" | "liberal";
 export type ChannelHint = "email" | "linkedin" | "sms";
+// Alias de compat pour l'UI (qui parlait de "Channel"/"Language").
+export type Channel = ChannelHint;
+export type Language = string; // langue active de la conversation (suit le candidat)
+
+export interface Role {
+  title: string;
+  seniority: string;
+  whatTheyllDo: string;
+  mustHaveSkills: string[];
+}
 
 // ── Contrat partagé avec l'UI ──
 export interface CompanyContext {
   identity: { name: string; oneLiner: string; industry: string; sizeStage: string; website?: string };
   culture: { values: string[]; cultureNotes: string; workStyle?: string };
   hiring: {
-    roles: { title: string; seniority: string; whatTheyllDo: string; mustHaveSkills: string[] }[];
+    roles: Role[];
     idealCandidateTraits: string[];
   };
   voice: { tone: string; formality: Formality; language: string; emojiUse: EmojiUse; dontSay?: string[] };

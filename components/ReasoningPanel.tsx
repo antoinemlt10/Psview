@@ -85,11 +85,11 @@ export function ReasoningPanel({ output }: { output: AgentOutput }) {
       <section>
         <h3 className="eyebrow mb-3">Plan · {plan.goal}</h3>
         <ol className="relative flex flex-col gap-0">
-          {plan.steps.map((step, i) => {
+          {plan.stages.map((step, i) => {
             const active = step.stage === plan.currentStage;
-            const idx = plan.steps.findIndex((s) => s.stage === plan.currentStage);
+            const idx = plan.stages.findIndex((s) => s.stage === plan.currentStage);
             const done = i < idx;
-            const last = i === plan.steps.length - 1;
+            const last = i === plan.stages.length - 1;
             return (
               <li key={step.stage} className="flex gap-3">
                 <div className="flex flex-col items-center">

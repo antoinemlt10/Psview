@@ -1,39 +1,57 @@
 import Link from "next/link";
 import { ReasoningPanel } from "@/components/ReasoningPanel";
-import type { AgentOutput } from "@/lib/types";
+import type { AgentOutput, AgentState } from "@/lib/types";
 
 // A static, representative snapshot of the reasoning panel — the hero visual.
 // It embodies the product: this is what the agent's "thinking" looks like.
+// Typed against the single shared contract (no placeholder shape).
+const HERO_PERSONALITY: AgentOutput["personality"] = {
+  persona: "Camille — a recruiting agent for PsView, warm and direct.",
+  traits: ["warm", "direct", "values ownership"],
+  voiceProfile: { formality: "neutral", emojiUse: "sparing", language: "en", styleAdjustments: [] },
+  rationale: "",
+};
+const HERO_PLAN: AgentOutput["plan"] = {
+  goal: "Engage the candidate and book a call",
+  currentStage: "handle_objection",
+  stages: [
+    { stage: "intro", objective: "Open with a personalised, context-grounded message" },
+    { stage: "value_pitch", objective: "Show the role's value, anchored on the candidate" },
+    { stage: "handle_objection", objective: "Address concerns and objections without re-pitching" },
+    { stage: "propose_call", objective: "Propose a call once interest is sufficient" },
+  ],
+};
+const HERO_STATE: AgentState = {
+  personaKey: "persona_demo",
+  personality: HERO_PERSONALITY,
+  plan: HERO_PLAN,
+  candidateMemory: {
+    rejections: [],
+    constraints: [],
+    objections: [],
+    facts: [],
+    dismissedTopics: [],
+    styleFeedback: [],
+    temperature: "lukewarm",
+  },
+  agentMemory: { pointsMade: [], questionsAsked: [], proposalsMade: [] },
+  counters: { messagesSent: 1, revisions: 0, objectionsRaised: 1, objectionsResolved: 0 },
+};
 const HERO_OUTPUT: AgentOutput = {
-  personality: {
-    persona: "Camille — a recruiting agent for PsView, warm and direct.",
-    traits: ["warm", "direct", "values ownership"],
-    voiceProfile: { tone: "warm and direct", formality: "neutral", emojiUse: "sparing", language: "en" },
-    rationale: "",
-  },
-  plan: {
-    goal: "Engage the candidate and book a call",
-    currentStage: "handle",
-    steps: [
-      { stage: "open", objective: "Open with a personalised, context-grounded message" },
-      { stage: "qualify", objective: "Understand the candidate's situation and motivations" },
-      { stage: "handle", objective: "Address objections (timing, compensation, not looking)" },
-      { stage: "book", objective: "Convert interest into a concrete call" },
-    ],
-  },
+  personality: HERO_PERSONALITY,
+  plan: HERO_PLAN,
   reasoning: {
     candidateSignals: ["objection: timing", "asked a question"],
     decision:
-      'Timing objection → stage "handle": defuse pressure and offer a flexible slot, no commitment.',
-    groundingUsed: [
-      "identity.name",
-      "culture.values[0]",
-      "hiring.roles[].title",
-      "voice.tone",
-      "voice.dontSay",
-    ],
+      "Timing objection → handle_objection: defuse pressure and offer a flexible slot, no commitment.",
+    groundingUsed: ["identity.name", "culture.values[0]", "hiring.roles[].title"],
+    constraintsRespected: ["no out-of-stage call/scheduling", "no banned term used"],
+    avoidedRepetition: ['did not repeat: "team is senior"'],
+    memoryUpdates: ['+ objections: "timing — busy this quarter"'],
   },
   nextMessages: [{ channelHint: "email", body: "" }],
+  state: HERO_STATE,
+  meta: { ok: true, errors: [], llmCallsFired: 2, model: "claude-sonnet-4-6" },
 };
 
 function Wordmark({ onDark = false }: { onDark?: boolean }) {
