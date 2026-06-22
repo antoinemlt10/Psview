@@ -24,7 +24,6 @@ import { runWrite, fallbackMessage, fallbackLang, type WriteArgs } from "./write
 import {
   deterministicChecks,
   llmVerify,
-  needsLlmVerify,
   containsTerm,
   hasSchedulingLanguage,
   repairMessage,
@@ -93,7 +92,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     const contextChanged = !!prior && prior.personaKey !== personaKey;
     const carry = prior && !contextChanged;
     if (contextChanged) {
-      errors.push("contexte changé (personaKey différent) → mémoire réinitialisée");
+      errors.push("context changed (different personaKey) → memory reset");
     }
 
     let candidateMemory: CandidateMemory = carry
@@ -116,7 +115,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     // ── 1) REASON (1 appel LLM, modèle fort) ──
     const reasonRes = await runReason(input, candidateMemory, agentMemory);
     calls += reasonRes.calls;
-    if (!reasonRes.ok) errors.push(`reason: ${reasonRes.error ?? "échec"} (fallback déterministe)`);
+    if (!reasonRes.ok) errors.push(`reason: ${reasonRes.error ?? "failed"} (deterministic fallback)`);
 
     // ── LANGUE ACTIVE : dominante + STICKY sur la conversation (déterministe). ──
     // On mirror le candidat mais sur la langue DOMINANTE, pas sur le dernier mot :
@@ -248,7 +247,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 
     if (!writeRes.ok || !writeRes.messages) {
       // CATASTROPHIQUE (aucun draft) → repli d'étape réparé (pas de stub générique).
-      errors.push(`write: ${writeRes.error ?? "échec"} → repli d'étape`);
+      errors.push(`write: ${writeRes.error ?? "failed"} → stage fallback`);
       messages = [safeFallback(writeArgs, vctx0)];
     } else {
       messages = writeRes.messages;
@@ -267,29 +266,28 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
         });
         calls += rw.calls;
         if (rw.ok && rw.messages) messages = rw.messages;
-        else errors.push("langue: régénération échouée");
+        else errors.push("language: regeneration failed");
       }
 
       // 4a) Réparation chirurgicale déterministe par message (jamais de re-roll→stub).
       messages = verifyBatch(messages);
 
-      // 4b) Adhérence sémantique sur le LOT (tours de réaction) → 1 ré-écriture max.
+      // 4b) Vérif sémantique LLM sur le LOT — TOUJOURS (opener inclus) : cohérence +
+      //     grammaire/langue native, plus l'adhérence sur les tours de réaction. 1 ré-écriture max.
       const combined = messages.map((m) => m.body).join("\n\n");
-      if (hasHistory || needsLlmVerify({ channelHint: reason.channelHint, body: combined }, forbidden)) {
-        const lv = await llmVerify(
-          { channelHint: reason.channelHint, body: combined },
-          forbidden,
-          hasHistory ? adherenceCtx : undefined,
-        );
-        calls += lv.calls;
-        if (!lv.ok) errors.push("verify(llm): indisponible (laissé passer)");
-        if (!lv.pass && revisions < CAPS.maxRevisions) {
-          revisions++;
-          const rw = await runWrite({ ...writeArgs, critique: lv.violations.join("\n") });
-          calls += rw.calls;
-          if (rw.ok && rw.messages) messages = verifyBatch(rw.messages);
-          else errors.push(`révision write: ${rw.error ?? "échec"} (lot réparé conservé)`);
-        }
+      const lv = await llmVerify(
+        { channelHint: reason.channelHint, body: combined },
+        forbidden,
+        { adherence: hasHistory ? adherenceCtx : undefined, language: activeLanguage },
+      );
+      calls += lv.calls;
+      if (!lv.ok) errors.push("verify(llm): unavailable (passed through)");
+      if (!lv.pass && revisions < CAPS.maxRevisions) {
+        revisions++;
+        const rw = await runWrite({ ...writeArgs, critique: lv.violations.join("\n") });
+        calls += rw.calls;
+        if (rw.ok && rw.messages) messages = verifyBatch(rw.messages);
+        else errors.push(`write revision: ${rw.error ?? "failed"} (repaired batch kept)`);
       }
     }
 
@@ -367,9 +365,9 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 function measureAvoided(msg: NextMessage, forbidden: ReturnType<typeof buildForbiddenList>): string[] {
   const lower = `${msg.subject ?? ""}\n${msg.body}`.toLowerCase();
   const out: string[] = [];
-  for (const t of forbidden.bannedTopics) if (!containsTerm(lower, t)) out.push(`n'a pas reproposé : « ${t} »`);
-  for (const f of forbidden.knownFacts) if (!containsTerm(lower, f)) out.push(`n'a pas re-demandé : « ${f} »`);
-  for (const p of forbidden.pointsMade) if (!containsTerm(lower, p)) out.push(`n'a pas répété : « ${p} »`);
+  for (const t of forbidden.bannedTopics) if (!containsTerm(lower, t)) out.push(`did not re-propose: "${t}"`);
+  for (const f of forbidden.knownFacts) if (!containsTerm(lower, f)) out.push(`did not re-ask: "${f}"`);
+  for (const p of forbidden.pointsMade) if (!containsTerm(lower, p)) out.push(`did not repeat: "${p}"`);
   return out.slice(0, 8);
 }
 
@@ -378,24 +376,24 @@ function measureConstraints(msg: NextMessage, vctx: DeterministicCtx, invNotes: 
   const lower = haystack.toLowerCase();
   const out = [...invNotes];
   if (vctx.forbidden.dontSay.length && vctx.forbidden.dontSay.every((t) => !containsTerm(lower, t))) {
-    out.push("aucun terme proscrit (dontSay) utilisé");
+    out.push("no banned term used");
   }
   if (!vctx.schedulingAllowed && !hasSchedulingLanguage(haystack)) {
-    out.push("pas de proposition d'appel/créneau (hors-stage)");
+    out.push("no out-of-stage call/scheduling");
   }
-  if (msg.body.length <= vctx.bodyLimit) out.push(`longueur respectée (${msg.body.length} ≤ ${vctx.bodyLimit})`);
-  for (const c of vctx.forbidden.constraints) out.push(`respecte la contrainte active : « ${c} »`);
+  if (msg.body.length <= vctx.bodyLimit) out.push(`length OK (${msg.body.length} ≤ ${vctx.bodyLimit})`);
+  for (const c of vctx.forbidden.constraints) out.push(`respects active constraint: "${c}"`);
   return out.slice(0, 10);
 }
 
 // Bonus : journalise les vrais MOVES du message (excuses, proposition d'échange)
-// pour qu'ils ne soient pas répétés au tour suivant.
+// pour qu'ils ne soient pas répétés au tour suivant. (Mémoire interne → anglais.)
 function detectMoves(body: string): string[] {
   const moves: string[] = [];
   if (/\b(d[ée]sol[ée]|navr[ée]|excuse|pardon|sorry|apolog)/i.test(body)) {
-    moves.push("a présenté des excuses");
+    moves.push("apologized");
   }
-  if (hasSchedulingLanguage(body)) moves.push("a proposé un échange/créneau");
+  if (hasSchedulingLanguage(body)) moves.push("proposed a call/scheduling");
   return moves;
 }
 

@@ -92,9 +92,8 @@ export function applyInvariants(reason: ReasonOutput, ctx: InvariantContext): In
   //    renvoie "intro" alors qu'on a déjà parlé, on clamp sur le dernier stage connu.
   if (stage === "intro" && ctx.hasHistory) {
     stage = ctx.priorStage && ctx.priorStage !== "intro" ? ctx.priorStage : "reengage";
-    nextObjective =
-      "Poursuivre la conversation en cours (pas de ré-introduction — historique présent).";
-    notes.push(`invariant: pas de ré-intro avec historique → stage clampé sur « ${stage} ».`);
+    nextObjective = "Continue the ongoing conversation (no re-introduction — history present).";
+    notes.push(`invariant: no re-intro with history → stage clamped to "${stage}".`);
   }
 
   // 2) Pas de re-pitch par-dessus une objection active : on traite l'objection d'abord.
@@ -113,17 +112,15 @@ export function applyInvariants(reason: ReasonOutput, ctx: InvariantContext): In
   ) {
     stage = hasActiveObjection ? "handle_objection" : "value_pitch";
     nextObjective =
-      "Susciter l'intérêt avant tout appel : le candidat n'a pas encore montré d'intérêt actif (pas de question sur l'opportunité ni d'ouverture). Apporter de la valeur, sans proposer d'échange.";
+      "Build interest before any call: the candidate hasn't shown active interest yet (no question about the opportunity, no openness). Add value, without proposing a call.";
     notes.push(
-      "invariant: pas d'intérêt actif du candidat → pas de proposition d'appel (clamp sur " +
-        stage +
-        ").",
+      `invariant: no active candidate interest → no call proposal (clamped to ${stage}).`,
     );
   }
   if (stage === "value_pitch" && hasActiveObjection) {
     stage = "handle_objection";
-    nextObjective = "Adresser l'objection/réticence active avant tout nouveau pitch.";
-    notes.push("invariant: objection active → bascule sur handle_objection (pas de re-pitch).");
+    nextObjective = "Address the active objection/reluctance before any new pitch.";
+    notes.push("invariant: active objection → switch to handle_objection (no re-pitch).");
   }
 
   // 3) Canal cohérent : valeur sûre par défaut.

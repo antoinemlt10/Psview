@@ -381,21 +381,21 @@ export default function TestPage() {
             </label>
             {(pending.length > 0 || draft.trim()) && !loading && (
               <p className="mb-2 text-xs text-muted">
-                {pending.length > 0 ? `${pending.length} message${pending.length > 1 ? "s" : ""} en file — ` : ""}
-                l'agent répond automatiquement dès que tu arrêtes d'écrire (~3 s).
+                {pending.length > 0 ? `${pending.length} message${pending.length > 1 ? "s" : ""} queued — ` : ""}
+                the agent replies on its own once you stop typing (~3s).
               </p>
             )}
             <textarea
               value={draft}
               onChange={(e) => {
                 setDraft(e.target.value);
-                // Si l'agent réfléchissait déjà, recommencer à taper SUSPEND sa
-                // réponse → il attend la prochaine pause (au cas où un 2e message vient).
+                // If the agent was already thinking, typing again SUSPENDS its reply
+                // → it waits for the next pause (in case a second message comes).
                 if (loading) cancelInFlight();
               }}
               onKeyDown={(e) => {
-                // Enter = envoyer un message candidat (bulle) ; Shift+Enter = saut de ligne ;
-                // ⌘/Ctrl+Enter = envoyer puis déclencher l'agent.
+                // Enter = send a candidate message (bubble); Shift+Enter = newline;
+                // ⌘/Ctrl+Enter = send and trigger the agent now.
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
                   requestAgentReply();
@@ -404,32 +404,22 @@ export default function TestPage() {
                   queueReply();
                 }
               }}
-              placeholder="Écris un message candidat, Entrée pour l'envoyer. Plusieurs d'affilée = plusieurs bulles."
+              placeholder="Type a candidate message, Enter to send. Several in a row = several bubbles."
               className="min-h-[72px] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none transition-colors focus:border-ink"
             />
             <div className="mt-2 flex items-center justify-between gap-2">
               <span className="text-xs text-muted">
-                Entrée = envoyer un message · Maj+Entrée = saut de ligne · l'agent répond à la pause
+                Enter = send a message · Shift+Enter = newline · the agent replies when you pause
               </span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={queueReply}
-                  disabled={loading || !draft.trim()}
-                  className="rounded-lg border border-line bg-surface px-3 py-2 text-sm font-medium text-ink transition-colors hover:border-ink disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Send message
-                </button>
-                <button
-                  type="button"
-                  onClick={requestAgentReply}
-                  disabled={loading || (!draft.trim() && pending.length === 0)}
-                  className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-on-dark transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-                  title="Ne pas attendre la pause"
-                >
-                  Reply now →
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={requestAgentReply}
+                disabled={loading || (!draft.trim() && pending.length === 0)}
+                className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-on-dark transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Don't wait for the pause"
+              >
+                Reply now →
+              </button>
             </div>
           </div>
         </div>

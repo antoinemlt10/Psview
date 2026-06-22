@@ -79,7 +79,7 @@ export function buildForbiddenList(
     ...enforcedEntries(mem, "dismissedTopics"),
   ]
     .filter((e) => e.status === "softened")
-    .map((e) => `« ${e.content} »${e.condition ? ` autorisé SI : ${e.condition}` : " (assoupli)"}`);
+    .map((e) => `"${e.content}"${e.condition ? ` allowed IF: ${e.condition}` : " (softened)"}`);
 
   return {
     bannedTopics,
@@ -97,14 +97,14 @@ export function renderForbiddenList(f: ForbiddenList): string {
   const block = (label: string, items: string[]) =>
     items.length ? `${label}:\n${items.map((i) => `  - ${i}`).join("\n")}` : "";
   return [
-    block("INTERDIT — sujets bannis (rejets / écartés actifs, ne JAMAIS reproposer)", f.bannedTopics),
-    block("INTERDIT — termes proscrits (dontSay)", f.dontSay),
-    block("NE PAS re-demander — infos déjà connues", f.knownFacts),
-    block("NE PAS répéter — arguments déjà servis", f.pointsMade),
-    block("NE PAS re-poser — questions déjà posées", f.questionsAsked),
-    block("DÉJÀ proposé", f.proposalsMade),
-    block("À RESPECTER — contraintes actives", f.constraints),
-    block("CONDITIONNEL — autorisé seulement si la condition est remplie", f.conditional),
+    block("FORBIDDEN — banned topics (active rejections / dismissed, NEVER re-propose)", f.bannedTopics),
+    block("FORBIDDEN — proscribed terms (dontSay)", f.dontSay),
+    block("DO NOT re-ask — already-known facts", f.knownFacts),
+    block("DO NOT repeat — arguments already made", f.pointsMade),
+    block("DO NOT re-ask — questions already asked", f.questionsAsked),
+    block("ALREADY proposed", f.proposalsMade),
+    block("MUST RESPECT — active constraints", f.constraints),
+    block("CONDITIONAL — allowed only if the condition is met", f.conditional),
   ]
     .filter(Boolean)
     .join("\n");

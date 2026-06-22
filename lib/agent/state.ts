@@ -22,17 +22,18 @@ export class InMemoryStateStore implements StateStore {
 export const defaultStateStore: StateStore = new InMemoryStateStore();
 
 // Plan par défaut : étapes = labels souples (PAS un FSM rigide), le planner raisonne dedans.
+// Objectifs internes (trace) → ANGLAIS ; seul le message candidat suit la langue de la conv.
 export function defaultPlan(intent: string): Plan {
   return {
     goal: intent,
     currentStage: "intro",
     stages: [
-      { stage: "intro", objective: "Établir le contact et le contexte." },
-      { stage: "value_pitch", objective: "Montrer la valeur du rôle, ancrée sur le candidat." },
-      { stage: "handle_objection", objective: "Adresser réticences et objections sans re-pitcher." },
-      { stage: "propose_call", objective: "Proposer un échange quand l'intérêt est suffisant." },
-      { stage: "confirm_logistics", objective: "Caler la logistique de l'échange." },
-      { stage: "reengage", objective: "Relancer avec tact si le candidat se refroidit." },
+      { stage: "intro", objective: "Establish contact and context." },
+      { stage: "value_pitch", objective: "Show the role's value, anchored on the candidate." },
+      { stage: "handle_objection", objective: "Address reluctance and objections without re-pitching." },
+      { stage: "propose_call", objective: "Propose a call once interest is sufficient." },
+      { stage: "confirm_logistics", objective: "Settle the logistics of the call." },
+      { stage: "reengage", objective: "Re-engage tactfully if the candidate cools off." },
     ],
   };
 }

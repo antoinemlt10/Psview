@@ -103,7 +103,7 @@ export function applyMemoryOps(
         };
         memory[op.bucket].push(entry);
         if (op.bucket === "objections") objectionsRaised++;
-        summary.push(`+ ${op.bucket}: « ${op.content} »`);
+        summary.push(`+ ${op.bucket}: "${op.content}"`);
         break;
       }
       case "retract": {
@@ -112,7 +112,7 @@ export function applyMemoryOps(
           hit.entry.status = "retracted";
           hit.entry.cause = "candidate_reversed";
           hit.entry.resolvedTurn = turn;
-          summary.push(`↩ retract (${hit.bucket}): « ${hit.entry.content} » — candidat revient dessus`);
+          summary.push(`↩ retract (${hit.bucket}): "${hit.entry.content}" — candidate reversed`);
         }
         break;
       }
@@ -123,8 +123,8 @@ export function applyMemoryOps(
           if (op.condition) hit.entry.condition = op.condition;
           hit.entry.strength = op.strength ?? Math.min(hit.entry.strength ?? 1, 0.5);
           summary.push(
-            `~ soften (${hit.bucket}): « ${hit.entry.content} »${
-              hit.entry.condition ? ` si: ${hit.entry.condition}` : ""
+            `~ soften (${hit.bucket}): "${hit.entry.content}"${
+              hit.entry.condition ? ` if: ${hit.entry.condition}` : ""
             }`,
           );
         }
@@ -137,7 +137,7 @@ export function applyMemoryOps(
           hit.entry.cause = "agent_persuaded";
           hit.entry.resolvedTurn = turn;
           if (hit.bucket === "objections") objectionsResolved++;
-          summary.push(`✓ resolve (${hit.bucket}): « ${hit.entry.content} » — adressé par l'agent`);
+          summary.push(`✓ resolve (${hit.bucket}): "${hit.entry.content}" — addressed by agent`);
         }
         break;
       }
@@ -154,7 +154,7 @@ export function applyMemoryOps(
             strength: 1,
           };
           memory[hit.bucket].push(entry);
-          summary.push(`⇄ supersede (${hit.bucket}): « ${hit.entry.content} » → « ${op.content} »`);
+          summary.push(`⇄ supersede (${hit.bucket}): "${hit.entry.content}" → "${op.content}"`);
         }
         break;
       }

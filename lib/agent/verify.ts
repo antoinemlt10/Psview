@@ -275,23 +275,24 @@ export interface AdherenceCtx {
   avoidedRepetition: string[]; // ce que REASON s'était engagé à éviter
 }
 
-// VERIFY LLM (modèle léger) — deux vérifications sémantiques que le code rate :
-//  (a) MÉMOIRE : reproposition proche d'un rejet, re-demande d'une info connue, redite ;
-//  (b) ADHÉRENCE : le message FINAL a-t-il exécuté la décision (mustDo) et évité les
-//      mustNotDo / répétitions promises ? Divergence → violations → révision.
+export interface LlmVerifyOpts {
+  adherence?: AdherenceCtx;
+  language?: string; // langue de sortie attendue (proofread grammaire/native)
+}
+
+// VERIFY LLM (modèle léger) — vérifications sémantiques que le code rate :
+//  (A) MÉMOIRE : reproposition proche d'un rejet, re-demande d'une info connue, redite ;
+//  (B) ADHÉRENCE : le message FINAL a-t-il exécuté la décision (mustDo) et évité les mustNotDo ;
+//  (C) COHÉRENCE : pas de référent implicite / phrase sur-compressée ;
+//  (D) GRAMMAIRE : prose native et irréprochable dans la langue de sortie (anti-calque).
+// (C) et (D) s'appliquent à TOUS les messages, y compris l'opener (1er message).
 export async function llmVerify(
   msg: NextMessage,
   forbidden: ForbiddenList,
-  adherence?: AdherenceCtx,
+  opts: LlmVerifyOpts = {},
 ): Promise<LlmVerifyResult> {
-  const needsMemory =
-    forbidden.bannedTopics.length ||
-    forbidden.knownFacts.length ||
-    forbidden.pointsMade.length ||
-    forbidden.questionsAsked.length;
-  const needsAdherence =
-    !!adherence && (adherence.mustDo.length > 0 || adherence.mustNotDo.length > 0);
-  if (!needsMemory && !needsAdherence) return { pass: true, violations: [], ok: true, calls: 0 };
+  const adherence = opts.adherence;
+  // (C) cohérence + (D) grammaire sont toujours pertinentes → on appelle toujours.
 
   const system = [
     "Tu es un vérificateur strict du message FINAL d'un agent de recrutement.",
@@ -304,8 +305,15 @@ export async function llmVerify(
     "auto-suffisante. Signale tout pronom ou sujet IMPLICITE sans référent énoncé (ex: « It's built",
     "in. » sans dire de QUOI on parle ; « Not a stretch, not occasional. » sans sujet), toute phrase",
     "sur-compressée incompréhensible hors contexte, toute référence à un non-dit. = violation.",
+    opts.language
+      ? `(D) GRAMMAIRE / LANGUE NATIVE : la prose doit être irréprochable et NATIVE en ${opts.language}. ` +
+        "Signale tout calque d'une autre langue : article manquant (« plupart des… » au lieu de " +
+        "« la plupart des… »), accord/conjugaison fautifs, ordre des mots non natif, tournure traduite. = violation."
+      : "",
     "Si tout est respecté : pass=true. Sinon pass=false + violations précises. Réponds via le tool.",
-  ].join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const user = [
     "MESSAGE FINAL :",
@@ -334,7 +342,7 @@ export async function llmVerify(
     system,
     user,
     toolName: "verdict",
-    toolDescription: "Rend un verdict pass/violations sur la mémoire ET l'adhérence à la décision.",
+    toolDescription: "Rend un verdict pass/violations sur mémoire, adhérence, cohérence et grammaire.",
     schema: VerifyOutputSchema,
     maxTokens: MAX_TOKENS.verify,
     timeoutMs: TIMEOUTS.verify,
